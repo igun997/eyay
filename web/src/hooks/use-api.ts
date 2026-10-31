@@ -13,7 +13,8 @@ export async function api<T = unknown>(url: string, init?: RequestInit & { json?
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401 && typeof window !== "undefined") window.location.href = "/login";
+    // an expired session sends the user to /login; a wrong password on /login itself must stay on the form
+    if (res.status === 401 && typeof window !== "undefined" && !url.startsWith("/api/auth/")) window.location.href = "/login";
     throw new ApiError(res.status, data.error ?? res.statusText);
   }
   return data as T;
