@@ -41,7 +41,7 @@ event reaches triage.
 
 ## Behaviour rules (suspicious behaviour / fraud indicators)
 `behavior_rules` ships a default pack (weapon-like object, tampering, concealing an item, climbing a barrier, face covered,
-lingering; licence-plate obscured is off by default). Classifier rules add one `noul` (yes/no) question each to the same
+lingering; face-covered and licence-plate-obscured are off by default because they proved noisy or angle-dependent). Classifier rules add one `noul` (yes/no) question each to the same
 `/v1/systemone` request as the class question, so one forward pass over the snapshot answers all of them. A rule triggers at
 P(yes) >= its threshold. Every evaluated rule is stored in `events.cls_flags`; a trigger sets `events.suspicious`, raises the
 event and incident severity to the rule's severity, adds a `system` timeline entry and, if the rule says so, opens an incident

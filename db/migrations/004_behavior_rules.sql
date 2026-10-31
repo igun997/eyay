@@ -2,6 +2,8 @@
 -- never verdicts: a System One model answers yes/no probabilities about a snapshot, nothing here accuses anyone.
 --   kind 'classifier' : one extra `noul` question asked in the same /v1/systemone request as the class question
 --   kind 'indication' : derived from the worker's snapshot-burst indication (no model call)
+-- Measured on ordinary footage with Liquid d1: weapon, tampering, concealment and trespass stayed below P=0.15;
+-- face_covered was noisy (hats, hoods) and ships disabled.
 CREATE TABLE IF NOT EXISTS behavior_rules (
   key            text PRIMARY KEY,
   title          text NOT NULL,
@@ -26,8 +28,8 @@ INSERT INTO behavior_rules (key, title, description, kind, question, applies_to,
   'Is the person hiding or concealing an item in a bag, jacket or clothing?', '{person}', 0.75, '{}', 'HIGH', true, true, 3),
  ('trespass', 'Climbing or crossing a barrier', 'A person climbs a fence, wall or gate.', 'classifier',
   'Is the person climbing over a fence, wall, gate or barrier?', '{person}', 0.75, '{}', 'HIGH', true, true, 4),
- ('face_covered', 'Face covered or disguised', 'Mask, balaclava or hood hiding the face.', 'classifier',
-  'Is the person''s face covered or disguised with a mask, balaclava or a hood pulled over the face?', '{person}', 0.75, '{}', 'MEDIUM', true, true, 5),
+ ('face_covered', 'Face covered or disguised', 'Mask, balaclava or hood hiding the face. Off by default: it fires on hats and hoods in ordinary footage (measured 4 of 12 people at 0.75); enable it and tune the threshold on your own cameras.', 'classifier',
+  'Is the person''s face covered or disguised with a mask, balaclava or a hood pulled over the face?', '{person}', 0.90, '{}', 'MEDIUM', true, false, 5),
  ('lingering', 'Lingering in view', 'A person stays in place for the whole snapshot burst (possible loitering or casing).', 'indication',
   NULL, '{person}', 0.75, '{"indication_kind":"lingering","min_burst_ms":5000}', 'LOW', false, true, 6),
  ('plate_obscured', 'Licence plate covered or obscured', 'Plate hidden or missing. Off by default: depends heavily on camera angle.', 'classifier',
