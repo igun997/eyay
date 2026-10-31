@@ -109,6 +109,31 @@ try {
     });
   }
 
+  await step("snapshot burst: several frames, each with its own box, plus an indication", async () => {
+    for (let i = 0; i < 40; i++) {
+      const { events } = await (await sec.request.get(`${BASE}/api/events?tab=needs_review`)).json();
+      const e = events.find((x) => x.id === ev.id);
+      const frames = await (await sec.request.get(`${BASE}/api/events/${ev.id}/frames`)).json();
+      if (e?.burst_done && frames.length >= 2) {
+        const offs = frames.map((f) => f.offset_ms);
+        assert(offs.every((o, k) => k === 0 || o > offs[k - 1]), `offsets not increasing: ${offs}`);
+        assert(e.indication && e.indication_kind && e.burst_ms > 0, `no indication: ${JSON.stringify({ k: e.indication_kind, t: e.indication })}`);
+        for (const f of frames) assert((await sec.request.get(`${BASE}/api/events/${ev.id}/snapshot/${f.idx}`)).ok(), `frame ${f.idx} missing`);
+        console.log(`     ${frames.length} frames at ${offs.join("/")} ms, ${e.indication_kind}: ${e.indication}`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    throw new Error("burst never completed");
+  });
+
+  await step("rules page lists the default behaviour rules", async () => {
+    await sec.goto(`${BASE}/rules`);
+    await sec.waitForSelector("text=Behaviour rules");
+    for (const t of ["Weapon-like object", "Concealing an item", "Tampering with equipment, lock or door", "Lingering in view"]) await sec.waitForSelector(`text=${t}`);
+    await sec.screenshot({ path: `${OUT}/rules.png`, fullPage: true });
+  });
+
   await step("live view streams frames (MJPEG with boxes)", async () => {
     await sec.goto(`${BASE}/cameras`);
     await sec.waitForSelector("img[alt^='Live']");
