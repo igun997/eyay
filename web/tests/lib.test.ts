@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { kindOf, sourceInput, reviewInput } from "@/lib/schemas";
 import { can } from "@/lib/roles";
 import { ago, agoText } from "@/lib/format";
+import { agreement } from "@/lib/classification";
 import { maskCreds } from "@/lib/server/queries";
 
 describe("kindOf", () => {
@@ -64,5 +65,18 @@ describe("format + masking", () => {
   it("maskCreds hides the password but keeps user and host", () => {
     expect(maskCreds({ url: "rtsp://admin:s3cret@10.0.0.5/s" }).url).toBe("rtsp://admin:••••@10.0.0.5/s");
     expect(maskCreds({ url: "rtsp://10.0.0.5/s" }).url).toBe("rtsp://10.0.0.5/s");
+  });
+});
+
+describe("classifier agreement", () => {
+  it("compares the edge class with the classifier vocabulary", () => {
+    expect(agreement("person", "person")).toBe("agree");
+    expect(agreement("truck", "vehicle")).toBe("agree");
+    expect(agreement("car", "false_alarm")).toBe("disagree");
+    expect(agreement("person", "vehicle")).toBe("disagree");
+  });
+  it("is unknown without a classifier result or for classes it does not cover", () => {
+    expect(agreement("person", null)).toBe("unknown");
+    expect(agreement("bicycle", "person")).toBe("unknown");
   });
 });

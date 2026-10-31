@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from .classifier import ClassifierConfig
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,7 @@ class Settings:
     poll_s: float
     stall_s: float
     ort_threads: int | None
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -30,4 +33,5 @@ class Settings:
             poll_s=float(os.environ.get("EYEAI_POLL_S", "5")),
             stall_s=float(os.environ.get("EYEAI_STALL_S", "10")),
             ort_threads=int(os.environ["EYEAI_ORT_THREADS"]) if os.environ.get("EYEAI_ORT_THREADS") else None,
+            classifier=ClassifierConfig.from_env(),
         )

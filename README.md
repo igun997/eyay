@@ -10,6 +10,7 @@ UI reference: [docs/design-system](docs/design-system/README.md).
 | `eyeai-app` | `docker/web.Dockerfile` (`web/`, Next.js 15 + shadcn/ui) | UI + API, applies DB migrations on boot, seeds the first admin |
 | `eyeai-worker` | `docker/worker.Dockerfile` (`worker/`, reuses `src/eyeai/detect`) | stream listener, detector, events/incidents writer, MJPEG with boxes |
 | `postgres:16-alpine` | upstream | data |
+| `ollama/ollama` (profile `classifier`) | upstream, model **Liquid AI d1-3B** | server-side classification of every snapshot (System One decision model, text+image) |
 | `mediamtx` + `jrottenberg/ffmpeg` | upstream, compose profile `dev` only | local RTSP/HLS server fed with `data/samples/*.mp4` for live testing without a camera |
 
 ```bash
@@ -17,8 +18,16 @@ scripts/fetch_assets.sh                              # sample videos (dev feed o
 docker compose --profile dev up --build              # http://localhost:3000  admin@eyeai.local / admin12345
 # Sources & health -> Add source:  rtsp://mediamtx:8554/dock2  |  /gate  |  /aisle
 #                                  http://mediamtx:8888/aisle/index.m3u8   (HLS)
+CLASSIFIER_URL=http://classifier:11434 docker compose --profile dev --profile classifier up --build   # + d1 classifier (downloads 3.7 GB once)
 docker compose up --build                            # production-like: no demo feed, register your own cameras
 ```
+
+**Classification.** Each detection is queued and sent (cropped around its box) to a System One decision model that answers
+one typed question: `person` / `vehicle` / `false_alarm`. Triage shows both results (`EDGE` and `CLASSIFIER`), flags
+disagreements, and a person still decides; the classifier never dismisses anything. Model chosen from
+[awesome-system-one](https://github.com/andyrewlee/awesome-system-one): **d1-3B** (Apache-2.0-style open weights, text+image, native in
+Ollama `/v1/systemone`), 39/39 on a small crop set at ~3 s/image on 4 CPU cores. Clef-flash (9B) crashed in Ollama's CPU backend on the
+test machine. Use any `/v1/systemone` endpoint by setting `CLASSIFIER_URL` / `CLASSIFIER_MODEL`; leave `CLASSIFIER_URL` empty to run without it.
 
 Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,
 everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: inference

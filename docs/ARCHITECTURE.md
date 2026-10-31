@@ -22,5 +22,14 @@ admin (web) --register rtsp/m3u8--> Postgres <--poll sources-- worker --YOLOX-->
    event of the incident is dismissed the incident is resolved as false alarm).
 5. Security/admin acknowledges, assigns, notes and resolves incidents.
 
+## Classification (server side)
+After the edge detector writes an event it is `pipeline = queued`. A classifier loop in the worker (`SELECT ... FOR UPDATE
+SKIP LOCKED`) crops the snapshot around `bbox` (+15% margin) and asks a System One decision model for one `choice`
+question with options `person` / `vehicle` / `false_alarm` via `POST {CLASSIFIER_URL}/v1/systemone` (Ollama, model `d1`
+= Liquid AI d1-3B, text+image, ~3 s/image on 4 CPU cores). The answer is stored on the event (`cls_*`) and shown in
+triage as `label | confidence | CLASSIFIER` next to the edge result. It never dismisses anything: a person still
+confirms or dismisses. No classifier configured -> `skipped`; classifier down -> `failed` (retry later); either way the
+event reaches triage.
+
 ## Out of scope (by decision)
 Sensors (MQTT/Modbus), VLM, server classifier, shift reports, NVR playback/export, SSO. No actuators.

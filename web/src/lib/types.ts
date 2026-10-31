@@ -1,6 +1,8 @@
 export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type EventStatus = "ready_for_triage" | "confirmed" | "dismissed";
 export type IncidentStatus = "open" | "acknowledged" | "resolved";
+export type Pipeline = "queued" | "classifying" | "ready" | "failed" | "skipped";
+export type ClsLabel = "person" | "vehicle" | "false_alarm";
 export type SourceStatus = "pending" | "connecting" | "online" | "offline" | "error";
 export type SourceKind = "rtsp" | "m3u8";
 
@@ -25,6 +27,13 @@ export type EventRow = {
   note: string | null;
   track_id: number | null;
   snapshots: number;
+  pipeline: Pipeline;
+  cls_label: ClsLabel | null;
+  cls_confidence: number | null;
+  cls_probs: Record<string, number> | null;
+  cls_model: string | null;
+  cls_ms: number | null;
+  cls_error: string | null;
 };
 
 export type IncidentRow = {

@@ -9,7 +9,7 @@ export const GET = route(async (req) => {
   const tab = u.get("tab");
   const [events, counts] = await Promise.all([
     listEvents({
-      tab: tab === "needs_review" || tab === "resolved" ? tab : undefined,
+      tab: tab === "needs_review" || tab === "in_pipeline" || tab === "resolved" ? tab : undefined,
       sourceId: u.get("source") || undefined,
       label: u.get("label") || undefined,
       severity: u.get("severity") || undefined,

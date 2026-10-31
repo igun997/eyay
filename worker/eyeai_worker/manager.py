@@ -75,7 +75,7 @@ class WorkerManager:
                 with self._lock:
                     self._runners[sid] = r
                 r.start()
-        self.repo.heartbeat(self.settings.worker_id, len(self._runners), self.settings.model)
+        self.repo.heartbeat(self.settings.worker_id, len(self._runners), self.settings.model, self.settings.classifier.label)
 
     def run_forever(self) -> None:
         while not self._stop.is_set():

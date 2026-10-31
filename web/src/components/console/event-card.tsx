@@ -3,6 +3,8 @@ import type { EventRow } from "@/lib/types";
 import { agoText, time } from "@/lib/format";
 import { SeverityPill } from "./severity-pill";
 import { ClassificationBadge } from "./classification-badge";
+import { PipelineStatusChip } from "./status-chip";
+import { clsLabelText } from "@/lib/classification";
 
 export function EventCard({ event, selected, onSelect }: { event: EventRow; selected?: boolean; onSelect?: () => void }) {
   return (
@@ -24,6 +26,8 @@ export function EventCard({ event, selected, onSelect }: { event: EventRow; sele
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <SeverityPill severity={event.severity} />
           <ClassificationBadge label={event.label} confidence={event.confidence} source="EDGE" />
+          {event.cls_label && event.cls_confidence != null && <ClassificationBadge label={clsLabelText[event.cls_label]} confidence={event.cls_confidence} source="CLASSIFIER" />}
+          {(event.pipeline === "queued" || event.pipeline === "classifying") && <PipelineStatusChip status={event.pipeline} />}
         </div>
       </div>
     </button>

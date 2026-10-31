@@ -93,6 +93,22 @@ try {
     throw new Error("no detection arrived");
   });
 
+  if (process.env.E2E_CLASSIFIER === "1") {
+    await step("server classifier (System One d1) labels the snapshot", async () => {
+      for (let i = 0; i < 120; i++) {
+        const { events } = await (await sec.request.get(`${BASE}/api/events?tab=needs_review`)).json();
+        const e = events.find((x) => x.source_id === sourceId && x.cls_label);
+        if (e) {
+          assert(e.pipeline === "ready" && e.cls_model && e.cls_confidence > 0 && e.cls_confidence <= 1, `bad classification: ${JSON.stringify({ p: e.pipeline, m: e.cls_model, c: e.cls_confidence })}`);
+          console.log(`     edge=${e.label} classifier=${e.cls_label} ${e.cls_confidence.toFixed(2)} (${e.cls_model}, ${e.cls_ms} ms)`);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      throw new Error("no event was classified within 6 minutes");
+    });
+  }
+
   await step("live view streams frames (MJPEG with boxes)", async () => {
     await sec.goto(`${BASE}/cameras`);
     await sec.waitForSelector("img[alt^='Live']");
@@ -108,6 +124,7 @@ try {
     await sec.goto(`${BASE}/triage`);
     await sec.waitForSelector("button[aria-pressed]");
     await sec.waitForSelector("section[aria-label='Event detail'] img");
+    if (process.env.E2E_CLASSIFIER === "1") await sec.waitForSelector("text=Server classifier");
     await sec.screenshot({ path: `${OUT}/triage.png` });
     await sec.click("text=Confirm incident");
     await sec.fill("[role=dialog] textarea", "e2e: verified");

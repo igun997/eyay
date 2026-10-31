@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { PageHeader, Panel } from "@/components/console/page-header";
 import { SeverityPill } from "@/components/console/severity-pill";
-import { IncidentStatusChip, StatusChip } from "@/components/console/status-chip";
+import { IncidentStatusChip, PipelineStatusChip, StatusChip } from "@/components/console/status-chip";
 import { EmptyState, ErrorState, LoadingList, OfflineBanner } from "@/components/console/states";
 import { useApi } from "@/hooks/use-api";
 import { ago } from "@/lib/format";
@@ -11,7 +11,8 @@ import type { IncidentRow } from "@/lib/types";
 
 type Overview = {
   counts: { open_incidents: number; awaiting: number; online: number; total: number; events_24h: number; confirmed_24h: number; dismissed_24h: number };
-  worker: { last_seen: string; sources: number; model: string | null } | null;
+  worker: { last_seen: string; sources: number; model: string | null; classifier: string | null } | null;
+  pipeline: { queued: number; classifying: number; ready: number; failed: number };
   byLabel: { label: string; n: number }[];
   attention: IncidentRow[];
 };
@@ -67,6 +68,12 @@ export default function OverviewPage() {
             <Bar label="Detections" value={c.events_24h} max={c.events_24h} tone="bg-border-strong" />
             <Bar label="Awaiting triage" value={c.awaiting} max={c.events_24h} tone="bg-text-3" />
             <Bar label="Confirmed" value={c.confirmed_24h} max={c.events_24h} tone="bg-brand" />
+          </Panel>
+
+          <Panel title="Classification pipeline" aside={data.worker?.classifier ? <span className="font-mono">{data.worker.classifier}</span> : <span className="font-mono">classifier not configured</span>} bodyClassName="flex flex-wrap items-center gap-x-6 gap-y-3 p-5">
+            {([["queued", data.pipeline.queued], ["classifying", data.pipeline.classifying], ["ready", data.pipeline.ready], ["failed", data.pipeline.failed]] as const).map(([k, n]) => (
+              <span key={k} className="flex items-center gap-2"><PipelineStatusChip status={k} /><span className="font-mono text-sm">{n}</span></span>
+            ))}
           </Panel>
 
           <Panel title="By category · last 24 h" bodyClassName="flex flex-wrap gap-3 p-5">

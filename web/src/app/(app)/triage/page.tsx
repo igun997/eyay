@@ -18,11 +18,12 @@ import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { EmptyState, ErrorState, LoadingList, OfflineBanner } from "@/components/console/states";
 import { api, revalidate, useApi } from "@/hooks/use-api";
 import { dateTime, time } from "@/lib/format";
+import { agreement, clsLabelText } from "@/lib/classification";
 import { dismissReasons } from "@/lib/schemas";
 import type { EventRow, SourceRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Tab = "needs_review" | "resolved";
+type Tab = "needs_review" | "in_pipeline" | "resolved";
 
 export default function TriagePage() {
   const [tab, setTab] = useState<Tab>("needs_review");
@@ -41,7 +42,7 @@ export default function TriagePage() {
   if (label !== "all") params.set("label", label);
   if (severity !== "all") params.set("severity", severity);
   if (q) params.set("q", q);
-  const { data, error, loading, refresh, offline } = useApi<{ events: EventRow[]; counts: { needs_review: number; resolved: number } }>(`/api/events?${params}`, 4000);
+  const { data, error, loading, refresh, offline } = useApi<{ events: EventRow[]; counts: { needs_review: number; in_pipeline: number; resolved: number } }>(`/api/events?${params}`, 4000);
   const { data: sources } = useApi<SourceRow[]>("/api/sources", 15000);
 
   const events = data?.events ?? [];
@@ -71,7 +72,7 @@ export default function TriagePage() {
         <div className="ml-auto"><FilterSelect label="Sort" value={sort} onChange={setSort} options={[{ value: "newest", label: "Newest" }, { value: "oldest", label: "Oldest" }]} /></div>
       </div>
       <div role="tablist" className="flex gap-6 border-b border-border px-8">
-        {([["needs_review", "Needs review", data?.counts.needs_review], ["resolved", "Resolved", data?.counts.resolved]] as const).map(([k, l, n]) => (
+        {([["needs_review", "Needs review", data?.counts.needs_review], ["in_pipeline", "In pipeline", data?.counts.in_pipeline], ["resolved", "Resolved", data?.counts.resolved]] as const).map(([k, l, n]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setSel(null); }}
             className={cn("-mb-px border-b-2 pb-3 text-sm", tab === k ? "border-brand font-medium" : "border-transparent text-text-2")}>
             {l} <span className={cn("ml-1 font-mono text-xs", tab === k ? "text-brand" : "text-text-3")}>{n ?? ""}</span>
@@ -82,7 +83,7 @@ export default function TriagePage() {
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(380px,520px)_1fr]">
         <div className="overflow-y-auto border-r border-border p-4">
           {loading ? <LoadingList /> : error && !data ? <ErrorState onRetry={() => refresh()} message={error.message} /> :
-            events.length === 0 ? <EmptyState title={tab === "needs_review" ? "No events to review" : "Nothing resolved yet"}>New events appear here as soon as a live stream detects something in a category.</EmptyState> :
+            events.length === 0 ? <EmptyState title={tab === "needs_review" ? "No events to review" : tab === "in_pipeline" ? "Nothing is being classified" : "Nothing resolved yet"}>New events appear here as soon as a live stream detects something in a category.</EmptyState> :
               <div className="space-y-3">{events.map((e) => <EventCard key={e.id} event={e} selected={e.id === current?.id} onSelect={() => setSel(e.id)} />)}</div>}
         </div>
         <section className="overflow-y-auto px-8 py-6" aria-label="Event detail">
@@ -91,7 +92,7 @@ export default function TriagePage() {
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight">{current.title}</h2>
                 <p className="mt-1 font-mono text-xs text-text-2">{current.source_code} · {current.source_name} · {time(current.detected_at)} · {current.code}</p>
-                <div className="mt-3 flex items-center gap-2"><SeverityPill severity={current.severity} /><PipelineStatusChip status={current.status} /></div>
+                <div className="mt-3 flex items-center gap-2"><SeverityPill severity={current.severity} /><PipelineStatusChip status={current.status === "ready_for_triage" ? current.pipeline : current.status} /></div>
               </div>
               {current.snapshots > 0 && <DetectionImage src={`/api/events/${current.id}/snapshot/0`} bbox={current.bbox} label={current.label} confidence={current.confidence} />}
               <div>
@@ -100,6 +101,19 @@ export default function TriagePage() {
                   <div><p className="text-sm font-medium">Edge worker</p><p className="font-mono text-xs text-text-3">YOLOX · live stream · track {current.track_id ?? "–"}</p></div>
                   <ClassificationBadge label={current.label} confidence={current.confidence} source="EDGE" />
                 </div>
+                <div className="flex items-center justify-between border-b border-border py-3">
+                  <div><p className="text-sm font-medium">Server classifier</p>
+                    <p className="font-mono text-xs text-text-3">{current.cls_model ? `${current.cls_model} · fixed classes${current.cls_ms ? ` · ${(current.cls_ms / 1000).toFixed(1)} s` : ""}` : "System One decision model · fixed classes"}</p></div>
+                  {current.cls_label && current.cls_confidence != null
+                    ? <ClassificationBadge label={clsLabelText[current.cls_label]} confidence={current.cls_confidence} source="CLASSIFIER" />
+                    : <PipelineStatusChip status={current.pipeline} />}
+                </div>
+                {current.pipeline === "failed" && current.cls_error && <p className="mt-2 font-mono text-xs text-sev-high">Classifier error: {current.cls_error}</p>}
+                {agreement(current.label, current.cls_label) === "disagree" && (
+                  <p role="note" className="mt-3 border-l-2 border-sev-high bg-sev-high/10 p-3 text-sm">
+                    <span className="font-semibold">Classifier disagrees.</span> The detector said {current.label}; the classifier says {clsLabelText[current.cls_label!]}. Check the snapshot before confirming.
+                  </p>
+                )}
               </div>
               <div>
                 <p className="caps border-b border-border pb-2">Context</p>

@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .classifier import Classification, ClassifyJob
 from .models import Category, SourceInfo
 
 log = logging.getLogger("eyeai.repo")
@@ -63,7 +64,7 @@ class Repository(Protocol):
         inference_ms: float | None,
     ) -> None: ...
 
-    def heartbeat(self, worker_id: str, sources: int, model: str | None) -> None: ...
+    def heartbeat(self, worker_id: str, sources: int, model: str | None, classifier: str | None = None) -> None: ...
 
 
 class _PgTx:
@@ -119,7 +120,11 @@ class PgRepository:
         while not (stop and stop.is_set()):
             try:
                 with psycopg.connect(self._dsn, row_factory=dict_row, connect_timeout=5) as c:
-                    ok = c.execute("SELECT to_regclass('public.sources') IS NOT NULL AS ok").fetchone()["ok"]
+                    # schema = migration 001 (sources) AND 002 (events.pipeline), both applied by the web app on boot
+                    ok = c.execute(
+                        "SELECT to_regclass('public.sources') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns "
+                        "WHERE table_schema='public' AND table_name='events' AND column_name='pipeline') AS ok"
+                    ).fetchone()["ok"]
                 if ok:
                     self._pool.open(wait=True, timeout=30)
                     return
@@ -165,10 +170,64 @@ class PgRepository:
                 (status, last_error, last_seen, fps, inference_ms, source_id),
             )
 
-    def heartbeat(self, worker_id, sources, model):
+    def heartbeat(self, worker_id, sources, model, classifier=None):
         with self._pool.connection() as c:
             c.execute(
-                "INSERT INTO worker_heartbeats (worker_id, last_seen, sources, model) VALUES (%s, now(), %s, %s) "
-                "ON CONFLICT (worker_id) DO UPDATE SET last_seen=now(), sources=EXCLUDED.sources, model=EXCLUDED.model",
-                (worker_id, sources, model),
+                "INSERT INTO worker_heartbeats (worker_id, last_seen, sources, model, classifier) VALUES (%s, now(), %s, %s, %s) "
+                "ON CONFLICT (worker_id) DO UPDATE SET last_seen=now(), sources=EXCLUDED.sources, model=EXCLUDED.model, "
+                "classifier=EXCLUDED.classifier",
+                (worker_id, sources, model, classifier),
             )
+
+    # ---- classifier (see classifier.py). cls_at is the claim time while 'classifying', then the finish time. ----
+    def claim_queued_event(self, exclude=()):
+        with self._pool.connection() as c:  # one transaction: lock, flip to 'classifying', read the snapshot
+            row = c.execute(
+                "SELECT e.id::text AS id, e.bbox FROM events e "
+                "WHERE e.pipeline='queued' AND NOT (e.id::text = ANY(%s)) "
+                "ORDER BY e.detected_at FOR UPDATE OF e SKIP LOCKED LIMIT 1",
+                (list(exclude),),
+            ).fetchone()
+            if row is None:
+                return None
+            c.execute("UPDATE events SET pipeline='classifying', cls_at=now() WHERE id=%s::uuid", (row["id"],))
+            snap = c.execute(
+                "SELECT jpeg FROM event_snapshots WHERE event_id=%s::uuid ORDER BY idx LIMIT 1", (row["id"],)
+            ).fetchone()
+        return ClassifyJob(event_id=row["id"], bbox=row["bbox"], jpeg=bytes(snap["jpeg"]) if snap else None)
+
+    def store_classification(self, event_id, result: Classification):
+        with self._pool.connection() as c:
+            c.execute(
+                "UPDATE events SET pipeline='ready', cls_label=%s, cls_confidence=%s, cls_probs=%s, cls_model=%s, "
+                "cls_ms=%s, cls_error=NULL, cls_at=now() WHERE id=%s::uuid",
+                (result.label, result.confidence, Jsonb(result.probs), result.model, result.ms, event_id),
+            )
+
+    def store_classification_failure(self, event_id, error, *, requeue):
+        with self._pool.connection() as c:
+            c.execute(
+                "UPDATE events SET pipeline=%s, cls_error=%s, cls_at=now() WHERE id=%s::uuid",
+                ("queued" if requeue else "failed", error[:300], event_id),
+            )
+
+    def skip_all_queued(self):
+        with self._pool.connection() as c:
+            return c.execute("UPDATE events SET pipeline='skipped' WHERE pipeline='queued'").rowcount
+
+    def recover_stuck_classifying(self, older_than_s):
+        with self._pool.connection() as c:
+            return c.execute(
+                "UPDATE events SET pipeline='queued' WHERE pipeline='classifying' "
+                "AND (cls_at IS NULL OR cls_at < now() - make_interval(secs => %s))",
+                (older_than_s,),
+            ).rowcount
+
+    def classifier_stats(self):
+        with self._pool.connection() as c:
+            r = c.execute(
+                "SELECT count(*) FILTER (WHERE pipeline IN ('queued','classifying'))::int AS queued, "
+                "count(*) FILTER (WHERE pipeline='failed' AND cls_at > now() - interval '10 minutes')::int AS failed_recent "
+                "FROM events WHERE pipeline IN ('queued','classifying','failed')"
+            ).fetchone()
+        return {"queued": r["queued"], "failed_recent": r["failed_recent"]}

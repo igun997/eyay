@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { CheckCircle2, Hourglass, Inbox, Loader2, type LucideIcon } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Hourglass, Inbox, Loader2, MinusCircle, type LucideIcon } from "lucide-react";
 
 type Tone = "neutral" | "accent" | "ok" | "warn" | "danger";
 const tones: Record<Tone, string> = {
@@ -28,14 +28,16 @@ export const IncidentStatusChip = ({ status }: { status: keyof typeof incident }
   <StatusChip tone={incident[status][0]} dot={status === "open"}>{incident[status][1]}</StatusChip>
 );
 
+export type PipelineKey = keyof typeof pipeline;
 const pipeline = {
   received: [Inbox, "RECEIVED", "neutral"], queued: [Hourglass, "QUEUED", "neutral"],
-  classifying: [Loader2, "CLASSIFYING", "neutral"], ready_for_triage: [CheckCircle2, "READY FOR TRIAGE", "accent"],
+  classifying: [Loader2, "CLASSIFYING", "neutral"], ready_for_triage: [CheckCircle2, "READY FOR TRIAGE", "accent"], ready: [CheckCircle2, "READY FOR TRIAGE", "accent"],
   confirmed: [CheckCircle2, "CONFIRMED", "ok"], dismissed: [CheckCircle2, "DISMISSED", "neutral"],
+  failed: [AlertTriangle, "CLASSIFIER FAILED", "warn"], skipped: [MinusCircle, "NOT CLASSIFIED", "neutral"],
 } as const;
-export function PipelineStatusChip({ status }: { status: keyof typeof pipeline }) {
+export function PipelineStatusChip({ status }: { status: PipelineKey }) {
   const [Icon, label, tone] = pipeline[status];
-  return <StatusChip tone={tone} icon={Icon}>{label}</StatusChip>;
+  return <StatusChip tone={tone} icon={Icon} className={status === "classifying" ? "[&_svg]:animate-spin" : undefined}>{label}</StatusChip>;
 }
 
 const health = { online: ["ok", "ONLINE"], connecting: ["warn", "CONNECTING"], pending: ["warn", "PENDING"], offline: ["danger", "OFFLINE"], error: ["danger", "ERROR"] } as const;

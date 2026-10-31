@@ -5,18 +5,21 @@ const EVENT_SELECT = `
   SELECT e.id, e.code, e.title, e.label, e.confidence, e.severity, e.status, e.bbox, e.detected_at,
          e.source_id, s.code AS source_code, s.name AS source_name,
          e.incident_id, i.code AS incident_code, e.dismiss_reason, e.note, e.track_id,
-         (SELECT count(*)::int FROM event_snapshots x WHERE x.event_id = e.id) AS snapshots
+         (SELECT count(*)::int FROM event_snapshots x WHERE x.event_id = e.id) AS snapshots,
+         e.pipeline, e.cls_label, e.cls_confidence, e.cls_probs, e.cls_model, e.cls_ms, e.cls_error
   FROM events e
   JOIN sources s ON s.id = e.source_id
   LEFT JOIN incidents i ON i.id = e.incident_id`;
 
-export type EventFilter = { tab?: "needs_review" | "resolved"; sourceId?: string; label?: string; severity?: string; q?: string; sort?: "newest" | "oldest"; limit?: number };
+export type EventFilter = { tab?: "needs_review" | "in_pipeline" | "resolved"; sourceId?: string; label?: string; severity?: string; q?: string; sort?: "newest" | "oldest"; limit?: number };
 
 export function listEvents(f: EventFilter = {}) {
   const w: string[] = [];
   const p: unknown[] = [];
   const bind = (v: unknown) => (p.push(v), `$${p.length}`);
-  if (f.tab === "needs_review") w.push("e.status = 'ready_for_triage'");
+  // an event is reviewable once the classifier is done with it (ready) or gave up / is not configured (failed, skipped)
+  if (f.tab === "needs_review") w.push("e.status = 'ready_for_triage' AND e.pipeline IN ('ready','failed','skipped')");
+  if (f.tab === "in_pipeline") w.push("e.status = 'ready_for_triage' AND e.pipeline IN ('queued','classifying')");
   if (f.tab === "resolved") w.push("e.status IN ('confirmed','dismissed')");
   if (f.sourceId) w.push(`e.source_id = ${bind(f.sourceId)}`);
   if (f.label) w.push(`e.label = ${bind(f.label)}`);
@@ -33,8 +36,9 @@ export function listEvents(f: EventFilter = {}) {
 }
 
 export const eventCounts = () =>
-  one<{ needs_review: number; resolved: number }>(
-    `SELECT count(*) FILTER (WHERE status='ready_for_triage')::int AS needs_review,
+  one<{ needs_review: number; in_pipeline: number; resolved: number }>(
+    `SELECT count(*) FILTER (WHERE status='ready_for_triage' AND pipeline IN ('ready','failed','skipped'))::int AS needs_review,
+            count(*) FILTER (WHERE status='ready_for_triage' AND pipeline IN ('queued','classifying'))::int AS in_pipeline,
             count(*) FILTER (WHERE status<>'ready_for_triage')::int AS resolved FROM events`,
   );
 
@@ -86,20 +90,26 @@ export const listUsers = () => query<UserRow>("SELECT id,email,name,role,active,
 export async function overview() {
   const [counts] = await query<{ open_incidents: number; awaiting: number; online: number; total: number; events_24h: number; confirmed_24h: number; dismissed_24h: number }>(
     `SELECT (SELECT count(*)::int FROM incidents WHERE status <> 'resolved') AS open_incidents,
-            (SELECT count(*)::int FROM events WHERE status='ready_for_triage') AS awaiting,
+            (SELECT count(*)::int FROM events WHERE status='ready_for_triage' AND pipeline IN ('ready','failed','skipped')) AS awaiting,
             (SELECT count(*)::int FROM sources WHERE status='online' AND enabled) AS online,
             (SELECT count(*)::int FROM sources WHERE enabled) AS total,
             (SELECT count(*)::int FROM events WHERE detected_at > now() - interval '24 hours') AS events_24h,
             (SELECT count(*)::int FROM events WHERE status='confirmed' AND detected_at > now() - interval '24 hours') AS confirmed_24h,
             (SELECT count(*)::int FROM events WHERE status='dismissed' AND detected_at > now() - interval '24 hours') AS dismissed_24h`,
   );
-  const [worker] = await query<{ last_seen: string; sources: number; model: string | null }>(
-    "SELECT last_seen, sources, model FROM worker_heartbeats ORDER BY last_seen DESC LIMIT 1",
+  const [worker] = await query<{ last_seen: string; sources: number; model: string | null; classifier: string | null }>(
+    "SELECT last_seen, sources, model, classifier FROM worker_heartbeats ORDER BY last_seen DESC LIMIT 1",
+  );
+  const [pipeline] = await query<{ queued: number; classifying: number; ready: number; failed: number }>(
+    `SELECT count(*) FILTER (WHERE pipeline='queued')::int AS queued, count(*) FILTER (WHERE pipeline='classifying')::int AS classifying,
+            count(*) FILTER (WHERE pipeline='ready' AND status='ready_for_triage')::int AS ready,
+            count(*) FILTER (WHERE pipeline='failed' AND status='ready_for_triage')::int AS failed
+     FROM events WHERE status='ready_for_triage'`,
   );
   const byLabel = await query<{ label: string; n: number }>(
     "SELECT label, count(*)::int AS n FROM events WHERE detected_at > now() - interval '24 hours' GROUP BY label ORDER BY n DESC",
   );
-  return { counts, worker: worker ?? null, byLabel, attention: (await listIncidents("active")).slice(0, 5) };
+  return { counts, worker: worker ?? null, pipeline, byLabel, attention: (await listIncidents("active")).slice(0, 5) };
 }
 
 /** Strip user:password from stream URLs. Only admins (who register them) get the real value. */

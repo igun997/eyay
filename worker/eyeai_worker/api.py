@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 
+from .classifier import ClassifierService
 from .config import Settings
 from .manager import WorkerManager
 from .render import annotate, encode_jpeg
@@ -22,11 +23,20 @@ MAX_LIVE_FPS = 8
 MAX_WIDTH = 960
 
 
-def create_app(settings: Settings, manager: WorkerManager | None = None, repo: PgRepository | None = None) -> FastAPI:
+def create_app(
+    settings: Settings,
+    manager: WorkerManager | None = None,
+    repo: PgRepository | None = None,
+    classifier: ClassifierService | None = None,
+) -> FastAPI:
     own = manager is None
+    cls_repo: PgRepository | None = None
     if own:
         repo = PgRepository(settings.database_url)
         manager = WorkerManager(repo, settings)
+        # the classifier gets its own small pool so detection and classification never contend for connections
+        cls_repo = PgRepository(settings.database_url, max_size=2)
+        classifier = ClassifierService(cls_repo, settings.classifier)
     mgr = manager
 
     @contextlib.asynccontextmanager
@@ -37,13 +47,21 @@ def create_app(settings: Settings, manager: WorkerManager | None = None, repo: P
                 repo.wait_ready(mgr._stop)
                 mgr.run_forever()
 
+            def boot_classifier():
+                cls_repo.wait_ready(classifier.stop)
+                classifier.run_forever()
+
             thread = threading.Thread(target=boot, daemon=True, name="manager")
             thread.start()
+            threading.Thread(target=boot_classifier, daemon=True, name="classifier").start()
         yield
         if own:
+            classifier.stop.set()
             mgr.stop()
             if repo:
                 repo.close()
+            if cls_repo:
+                cls_repo.close()
 
     app = FastAPI(title="eyeai-worker", lifespan=lifespan)
 
@@ -66,7 +84,10 @@ def create_app(settings: Settings, manager: WorkerManager | None = None, repo: P
 
     @app.get("/health")
     def health():
-        return {"ok": True, "worker_id": mgr.settings.worker_id, "model": mgr.settings.model, "sources": mgr.running()}
+        return {
+            "ok": True, "worker_id": mgr.settings.worker_id, "model": mgr.settings.model, "sources": mgr.running(),
+            "classifier": classifier.status() if classifier else {"enabled": False, "model": None, "url": None, "queued": 0, "failed_recent": 0},
+        }
 
     @app.get("/snapshot/{source_id}.jpg")
     async def snapshot(source_id: str):

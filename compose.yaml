@@ -23,13 +23,35 @@ services:
   worker:
     build: { context: ., dockerfile: docker/worker.Dockerfile }
     image: eyeai-worker:latest
-    depends_on: { db: { condition: service_healthy }, app: { condition: service_healthy } }  # app applies migrations
+    depends_on:
+      db: { condition: service_healthy }
+      app: { condition: service_healthy }                                          # app applies migrations
+      classifier-init: { condition: service_completed_successfully, required: false }  # only with the classifier profile
     environment:
       DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
       WORKER_ID: worker-1
+      CLASSIFIER_URL: ${CLASSIFIER_URL:-}           # empty = no classification (events go straight to triage)
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-d1}
       EYEAI_TARGET_FPS: ${EYEAI_TARGET_FPS:-5}      # analysed frames/s per stream
       EYEAI_ORT_THREADS: ${EYEAI_ORT_THREADS:-}     # ONNX threads per stream (default: auto)
     expose: ["8090"]
+
+  # System One classifier (Liquid AI d1-3B, text+image) served by Ollama on /v1/systemone.
+  #   CLASSIFIER_URL=http://classifier:11434 docker compose --profile classifier up --build
+  # or point CLASSIFIER_URL at any Ollama / TypeSafe-compatible /v1/systemone endpoint (e.g. a GPU box) and skip this profile.
+  classifier:
+    profiles: [classifier]
+    image: ollama/ollama:latest
+    volumes: [ollama:/root/.ollama]
+    healthcheck: { test: ["CMD", "ollama", "list"], interval: 5s, timeout: 5s, retries: 30 }
+
+  classifier-init:   # one-shot: downloads the model (3.7 GB) into the volume, then exits
+    profiles: [classifier]
+    image: ollama/ollama:latest
+    entrypoint: ["ollama", "pull", "${CLASSIFIER_MODEL:-d1}"]
+    environment: { OLLAMA_HOST: "classifier:11434" }
+    depends_on: { classifier: { condition: service_healthy } }
+    restart: "no"
 
   mediamtx:
     profiles: [dev]
@@ -49,3 +71,4 @@ services:
 
 volumes:
   pgdata:
+  ollama:

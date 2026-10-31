@@ -20,7 +20,7 @@ const maskUrl = (u: string) => u.replace(/\/\/([^:@/]+):([^@/]+)@/, "//$1:••
 export default function SourcesPage() {
   const { data, error, loading, refresh } = useApi<SourceRow[]>("/api/sources", 4000);
   const { data: cats } = useApi<{ categories: CategoryRow[] }>("/api/categories", 60000);
-  const { data: ov } = useApi<{ worker: { last_seen: string; sources: number; model: string | null } | null }>("/api/overview", 5000);
+  const { data: ov } = useApi<{ worker: { last_seen: string; sources: number; model: string | null; classifier: string | null } | null }>("/api/overview", 5000);
   const [sel, setSel] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<SourceRow | null>(null);
@@ -38,9 +38,10 @@ export default function SourcesPage() {
     <>
       <PageHeader title="Sources & health" subtitle={`${online} of ${data.length} streams online`} actions={<Button onClick={() => setAdding(true)}>Add source</Button>} />
       <div className="px-8 pb-10 space-y-5">
-        <Panel title="Detection worker" aside={<StatusChip tone={workerOk ? "ok" : "danger"} dot>{workerOk ? "HEALTHY" : "NOT RESPONDING"}</StatusChip>} bodyClassName="grid grid-cols-3 gap-6 p-5">
+        <Panel title="Detection worker" aside={<StatusChip tone={workerOk ? "ok" : "danger"} dot>{workerOk ? "HEALTHY" : "NOT RESPONDING"}</StatusChip>} bodyClassName="grid grid-cols-4 gap-6 p-5">
           <div><p className="caps">Streams running</p><p className="mt-1 font-mono text-lg">{ov?.worker?.sources ?? 0}</p></div>
           <div><p className="caps">Model</p><p className="mt-1 font-mono text-lg">{ov?.worker?.model?.split("/").pop() ?? "–"}</p></div>
+          <div><p className="caps">Classifier</p><p className="mt-1 font-mono text-lg">{ov?.worker?.classifier ?? "off"}</p></div>
           <div><p className="caps">Last heartbeat</p><p className="mt-1 font-mono text-lg">{ov?.worker ? `${agoText(ov.worker.last_seen)}` : "never"}</p></div>
         </Panel>
         <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
