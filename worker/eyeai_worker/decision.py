@@ -109,7 +109,7 @@ class EventDecider:
                 severity=cat.severity, track_id=t.track_id,
                 bbox={"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}, title=title, detected_at=now,
             )
-            tx.insert_snapshot(event_id, *snap)
+            tx.insert_snapshot(event_id, *snap, bbox={"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}, offset_ms=0, idx=0)
             if incident_id:
                 tx.add_timeline(
                     incident_id=incident_id, kind="camera", title=title, event_id=event_id, at=now,

@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .behavior import EventState, Flag, Rule, apply_flags
 from .classifier import Classification, ClassifyJob
 from .models import Category, SourceInfo
 
@@ -39,7 +40,21 @@ class Tx(Protocol):
         detected_at: datetime,
     ) -> str: ...
 
-    def insert_snapshot(self, event_id: str, jpeg: bytes, width: int, height: int) -> None: ...
+    def insert_snapshot(
+        self, event_id: str, jpeg: bytes, width: int, height: int, *, bbox: dict[str, float] | None = None,
+        offset_ms: int = 0, idx: int = 0,
+    ) -> None: ...
+
+    def finalize_burst(self, event_id: str, *, burst_ms: int, kind: str, indication: str) -> None: ...
+
+    # behaviour rules (see behavior.apply_flags)
+    def lock_event(self, event_id: str) -> EventState | None: ...
+
+    def set_event_flags(self, event_id: str, flags: list[dict], suspicious: bool, severity: str) -> None: ...
+
+    def set_incident_severity(self, incident_id: str, severity: str) -> None: ...
+
+    def link_event_incident(self, event_id: str, incident_id: str) -> None: ...
 
     def add_timeline(
         self, *, incident_id: str, kind: str, title: str, detail: str | None, event_id: str | None, at: datetime
@@ -52,6 +67,8 @@ class Repository(Protocol):
     def list_sources(self) -> list[SourceInfo]: ...
 
     def list_categories(self) -> dict[str, Category]: ...
+
+    def list_behavior_rules(self) -> list[Rule]: ...
 
     def update_source_state(
         self,
@@ -95,11 +112,45 @@ class _PgTx:
         ).fetchone()
         return row["id"]
 
-    def insert_snapshot(self, event_id, jpeg, width, height):
+    def insert_snapshot(self, event_id, jpeg, width, height, *, bbox=None, offset_ms=0, idx=0):
         self._c.execute(
-            "INSERT INTO event_snapshots (event_id, idx, jpeg, width, height) VALUES (%s,0,%s,%s,%s)",
-            (event_id, jpeg, width, height),
+            "INSERT INTO event_snapshots (event_id, idx, jpeg, width, height, bbox, offset_ms) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (event_id, idx, jpeg, width, height, Jsonb(bbox) if bbox is not None else None, offset_ms),
         )
+
+    def finalize_burst(self, event_id, *, burst_ms, kind, indication):
+        self._c.execute(
+            "UPDATE events SET burst_ms=%s, indication_kind=%s, indication=%s, burst_done=true WHERE id=%s::uuid",
+            (burst_ms, kind, indication, event_id),
+        )
+
+    def lock_event(self, event_id):
+        r = self._c.execute(
+            "SELECT e.id::text AS id, e.incident_id::text AS incident_id, i.severity AS incident_severity, e.label, "
+            "e.severity, e.source_id::text AS source_id, s.name AS source_name, e.cls_flags, e.suspicious "
+            "FROM events e JOIN sources s ON s.id=e.source_id LEFT JOIN incidents i ON i.id=e.incident_id "
+            "WHERE e.id=%s::uuid FOR UPDATE OF e",
+            (event_id,),
+        ).fetchone()
+        if r is None:
+            return None
+        return EventState(
+            id=r["id"], incident_id=r["incident_id"], incident_severity=r["incident_severity"], label=r["label"],
+            severity=r["severity"], source_id=r["source_id"], source_name=r["source_name"],
+            flags=list(r["cls_flags"] or []), suspicious=r["suspicious"],
+        )
+
+    def set_event_flags(self, event_id, flags, suspicious, severity):
+        self._c.execute(
+            "UPDATE events SET cls_flags=%s, suspicious=%s, severity=%s WHERE id=%s::uuid",
+            (Jsonb(flags), suspicious, severity, event_id),
+        )
+
+    def set_incident_severity(self, incident_id, severity):
+        self._c.execute("UPDATE incidents SET severity=%s WHERE id=%s::uuid", (severity, incident_id))
+
+    def link_event_incident(self, event_id, incident_id):
+        self._c.execute("UPDATE events SET incident_id=%s::uuid WHERE id=%s::uuid", (incident_id, event_id))
 
     def add_timeline(self, *, incident_id, kind, title, detail, event_id, at):
         self._c.execute(
@@ -120,10 +171,12 @@ class PgRepository:
         while not (stop and stop.is_set()):
             try:
                 with psycopg.connect(self._dsn, row_factory=dict_row, connect_timeout=5) as c:
-                    # schema = migration 001 (sources) AND 002 (events.pipeline), both applied by the web app on boot
+                    # schema = migrations 001-004 (sources, events.pipeline, events.burst_done, events.cls_flags),
+                    # all applied by the web app on boot
                     ok = c.execute(
-                        "SELECT to_regclass('public.sources') IS NOT NULL AND EXISTS (SELECT 1 FROM information_schema.columns "
-                        "WHERE table_schema='public' AND table_name='events' AND column_name='pipeline') AS ok"
+                        "SELECT to_regclass('public.sources') IS NOT NULL AND to_regclass('public.behavior_rules') IS NOT NULL AND "
+                        "(SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='events' "
+                        "AND column_name IN ('pipeline','burst_done','cls_flags')) = 3 AS ok"
                     ).fetchone()["ok"]
                 if ok:
                     self._pool.open(wait=True, timeout=30)
@@ -158,9 +211,22 @@ class PgRepository:
     def list_categories(self) -> dict[str, Category]:
         with self._pool.connection() as c:
             rows = c.execute(
-                "SELECT label, title, severity, opens_incident, cooldown_s, enabled FROM categories"
+                "SELECT label, title, severity, opens_incident, cooldown_s, enabled, burst_s, burst_frames FROM categories"
             ).fetchall()
         return {r["label"]: Category(**r) for r in rows}
+
+    def list_behavior_rules(self):
+        with self._pool.connection() as c:
+            rows = c.execute(
+                "SELECT key, title, kind, question, applies_to, threshold, config, severity, opens_incident, position "
+                "FROM behavior_rules WHERE enabled ORDER BY position, key"
+            ).fetchall()
+        return [
+            Rule(key=r["key"], title=r["title"], kind=r["kind"], question=r["question"], applies_to=tuple(r["applies_to"] or ()),
+                 threshold=float(r["threshold"]), config=dict(r["config"] or {}), severity=r["severity"],
+                 opens_incident=r["opens_incident"], position=r["position"])
+            for r in rows
+        ]
 
     def update_source_state(self, source_id, *, status, last_error, last_seen, fps, inference_ms):
         with self._pool.connection() as c:

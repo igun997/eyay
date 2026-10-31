@@ -28,6 +28,8 @@ class Category:
     opens_incident: bool
     cooldown_s: int
     enabled: bool
+    burst_s: int = 4          # categories.burst_s / burst_frames (migration 003)
+    burst_frames: int = 3
 
 
 @dataclass(frozen=True)
