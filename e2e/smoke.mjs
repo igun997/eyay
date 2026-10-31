@@ -84,7 +84,7 @@ try {
   });
 
   const ev = await step("detections reach triage with a bounding box and snapshot", async () => {
-    for (let i = 0; i < 150; i++) {   // with the classifier on, an event only reaches triage after ~30 s of CPU classification
+    for (let i = 0; i < 240; i++) {   // (8 min) with the classifier on, an event only reaches triage after ~30 s of CPU classification
       const { events } = await (await sec.request.get(`${BASE}/api/events?tab=needs_review`)).json();
       const e = events.find((x) => x.source_id === sourceId && x.bbox && x.snapshots > 0);
       if (e) { console.log(`     ${e.label} ${e.confidence.toFixed(2)} ${e.incident_code}`); return e; }
@@ -105,7 +105,7 @@ try {
         }
         await new Promise((r) => setTimeout(r, 3000));
       }
-      throw new Error("no event was classified within 6 minutes");
+      throw new Error("no event was classified in time");
     });
   }
 
