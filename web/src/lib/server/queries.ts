@@ -1,0 +1,106 @@
+import { query, one } from "./db";
+import type { CategoryRow, EventRow, IncidentRow, SourceRow, TimelineRow, UserRow } from "../types";
+
+const EVENT_SELECT = `
+  SELECT e.id, e.code, e.title, e.label, e.confidence, e.severity, e.status, e.bbox, e.detected_at,
+         e.source_id, s.code AS source_code, s.name AS source_name,
+         e.incident_id, i.code AS incident_code, e.dismiss_reason, e.note, e.track_id,
+         (SELECT count(*)::int FROM event_snapshots x WHERE x.event_id = e.id) AS snapshots
+  FROM events e
+  JOIN sources s ON s.id = e.source_id
+  LEFT JOIN incidents i ON i.id = e.incident_id`;
+
+export type EventFilter = { tab?: "needs_review" | "resolved"; sourceId?: string; label?: string; severity?: string; q?: string; sort?: "newest" | "oldest"; limit?: number };
+
+export function listEvents(f: EventFilter = {}) {
+  const w: string[] = [];
+  const p: unknown[] = [];
+  const bind = (v: unknown) => (p.push(v), `$${p.length}`);
+  if (f.tab === "needs_review") w.push("e.status = 'ready_for_triage'");
+  if (f.tab === "resolved") w.push("e.status IN ('confirmed','dismissed')");
+  if (f.sourceId) w.push(`e.source_id = ${bind(f.sourceId)}`);
+  if (f.label) w.push(`e.label = ${bind(f.label)}`);
+  if (f.severity) w.push(`e.severity = ${bind(f.severity)}`);
+  if (f.q) {
+    const n = bind(`%${f.q}%`);
+    w.push(`(e.title ILIKE ${n} OR s.code ILIKE ${n} OR e.code ILIKE ${n} OR i.code ILIKE ${n})`);
+  }
+  const where = w.length ? "WHERE " + w.join(" AND ") : "";
+  return query<EventRow>(
+    `${EVENT_SELECT} ${where} ORDER BY e.detected_at ${f.sort === "oldest" ? "ASC" : "DESC"} LIMIT ${Math.min(f.limit ?? 100, 500)}`,
+    p,
+  );
+}
+
+export const eventCounts = () =>
+  one<{ needs_review: number; resolved: number }>(
+    `SELECT count(*) FILTER (WHERE status='ready_for_triage')::int AS needs_review,
+            count(*) FILTER (WHERE status<>'ready_for_triage')::int AS resolved FROM events`,
+  );
+
+export const getEvent = async (id: string) => (await query<EventRow>(`${EVENT_SELECT} WHERE e.id = $1`, [id]))[0] ?? null;
+
+const INC_SELECT = `
+  SELECT i.id, i.code, i.title, i.severity, i.status, i.label, i.source_id, s.code AS source_code, s.name AS source_name,
+         i.assigned_to, u.name AS assignee_name, i.opened_at, i.resolved_at,
+         (SELECT count(*)::int FROM events e WHERE e.incident_id = i.id) AS events
+  FROM incidents i
+  LEFT JOIN sources s ON s.id = i.source_id
+  LEFT JOIN users u ON u.id = i.assigned_to`;
+
+const SEV_ORDER = `CASE i.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END`;
+
+export const listIncidents = (status?: "active" | "resolved") =>
+  query<IncidentRow>(
+    `${INC_SELECT} ${status === "active" ? "WHERE i.status <> 'resolved'" : status === "resolved" ? "WHERE i.status = 'resolved'" : ""}
+     ORDER BY ${status === "resolved" ? "i.resolved_at DESC NULLS LAST" : `${SEV_ORDER}, i.opened_at DESC`} LIMIT 200`,
+  );
+
+export const getIncident = async (idOrCode: string) =>
+  (await query<IncidentRow>(`${INC_SELECT} WHERE i.id::text = $1 OR i.code = $1`, [idOrCode]))[0] ?? null;
+
+export const incidentTimeline = (id: string) =>
+  query<TimelineRow>(
+    `SELECT t.id, t.kind, t.title, t.detail, t.at, u.name AS user_name, t.event_id
+     FROM incident_timeline t LEFT JOIN users u ON u.id = t.user_id WHERE t.incident_id = $1 ORDER BY t.at, t.id`,
+    [id],
+  );
+
+export const incidentEvents = (id: string) => query<EventRow>(`${EVENT_SELECT} WHERE e.incident_id = $1 ORDER BY e.detected_at`, [id]);
+
+export const listSources = () =>
+  query<SourceRow>(
+    `SELECT id, code, name, url, kind, labels, min_confidence, enabled, status, last_error, last_seen, fps, inference_ms
+     FROM sources ORDER BY code`,
+  );
+
+export const getSource = async (id: string) =>
+  (await query<SourceRow>(
+    `SELECT id, code, name, url, kind, labels, min_confidence, enabled, status, last_error, last_seen, fps, inference_ms
+     FROM sources WHERE id = $1`, [id]))[0] ?? null;
+
+export const listCategories = () => query<CategoryRow>("SELECT * FROM categories ORDER BY severity, label");
+
+export const listUsers = () => query<UserRow>("SELECT id,email,name,role,active,created_at FROM users ORDER BY created_at");
+
+export async function overview() {
+  const [counts] = await query<{ open_incidents: number; awaiting: number; online: number; total: number; events_24h: number; confirmed_24h: number; dismissed_24h: number }>(
+    `SELECT (SELECT count(*)::int FROM incidents WHERE status <> 'resolved') AS open_incidents,
+            (SELECT count(*)::int FROM events WHERE status='ready_for_triage') AS awaiting,
+            (SELECT count(*)::int FROM sources WHERE status='online' AND enabled) AS online,
+            (SELECT count(*)::int FROM sources WHERE enabled) AS total,
+            (SELECT count(*)::int FROM events WHERE detected_at > now() - interval '24 hours') AS events_24h,
+            (SELECT count(*)::int FROM events WHERE status='confirmed' AND detected_at > now() - interval '24 hours') AS confirmed_24h,
+            (SELECT count(*)::int FROM events WHERE status='dismissed' AND detected_at > now() - interval '24 hours') AS dismissed_24h`,
+  );
+  const [worker] = await query<{ last_seen: string; sources: number; model: string | null }>(
+    "SELECT last_seen, sources, model FROM worker_heartbeats ORDER BY last_seen DESC LIMIT 1",
+  );
+  const byLabel = await query<{ label: string; n: number }>(
+    "SELECT label, count(*)::int AS n FROM events WHERE detected_at > now() - interval '24 hours' GROUP BY label ORDER BY n DESC",
+  );
+  return { counts, worker: worker ?? null, byLabel, attention: (await listIncidents("active")).slice(0, 5) };
+}
+
+/** Strip user:password from stream URLs. Only admins (who register them) get the real value. */
+export const maskCreds = <T extends { url: string }>(s: T): T => ({ ...s, url: s.url.replace(/\/\/([^:@/]+):([^@/]+)@/, "//$1:••••@") });

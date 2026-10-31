@@ -1,0 +1,78 @@
+"use client";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { api } from "@/hooks/use-api";
+import { kindOf } from "@/lib/schemas";
+import type { CategoryRow, SourceRow } from "@/lib/types";
+
+const slug = (s: string) => s.toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+
+/** Admin: register (or edit) an RTSP / M3U8 source and choose the categories the worker should watch. */
+export function SourceDialog({ open, onOpenChange, categories, source, onSaved, nextCode }: {
+  open: boolean; onOpenChange: (o: boolean) => void; categories: CategoryRow[]; source?: SourceRow; onSaved: () => void; nextCode: string;
+}) {
+  const [code, setCode] = useState(source?.code ?? nextCode);
+  const [name, setName] = useState(source?.name ?? "");
+  const [url, setUrl] = useState(source?.url ?? "");
+  const [labels, setLabels] = useState<string[]>(source?.labels ?? ["person", "car"]);
+  const [conf, setConf] = useState(source?.min_confidence ?? 0.4);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const kind = kindOf(url);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try {
+      if (source) await api(`/api/sources/${source.id}`, { method: "PATCH", json: { name, url, labels, min_confidence: conf } });
+      else await api("/api/sources", { method: "POST", json: { code, name, url, labels, min_confidence: conf } });
+      toast.success(source ? `${source.code} updated` : `${code} registered`, { description: "The worker picks it up within a few seconds." });
+      onSaved(); onOpenChange(false);
+    } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg rounded-lg border-border bg-surface-2">
+        <form onSubmit={save} className="space-y-4" noValidate>
+          <DialogHeader>
+            <DialogTitle>{source ? `Edit ${source.code}` : "Add source"}</DialogTitle>
+            <DialogDescription>Register an RTSP or M3U8 (HLS) URL. The worker listens to it and analyses frames live.</DialogDescription>
+          </DialogHeader>
+          {err && <p role="alert" className="rounded-sm border border-sev-critical/40 bg-sev-critical/10 px-3 py-2 text-sm text-sev-critical">{err}</p>}
+          <div className="grid grid-cols-[130px_1fr] gap-3">
+            <div className="space-y-2"><Label htmlFor="code">Code</Label><Input id="code" value={code} disabled={!!source} onChange={(e) => setCode(slug(e.target.value))} className="border-border-strong bg-background font-mono" /></div>
+            <div className="space-y-2"><Label htmlFor="name">Location name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Dock 2" className="border-border-strong bg-background" /></div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="url">Stream URL {kind && <span className="ml-2 font-mono text-[11px] text-ok">{kind === "rtsp" ? "RTSP" : "M3U8"}</span>}</Label>
+            <Input id="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="rtsp://user:pass@host:554/stream  or  https://host/live.m3u8" className="border-border-strong bg-background font-mono text-[13px]" />
+          </div>
+          <fieldset className="space-y-2">
+            <legend className="mb-1 text-sm font-medium">Categories to detect</legend>
+            <div className="grid grid-cols-3 gap-2">
+              {categories.filter((c) => c.enabled).map((c) => (
+                <Label key={c.label} htmlFor={`cat-${c.label}`} className="flex cursor-pointer items-center gap-2 rounded-sm border border-border-strong px-3 py-2 font-normal">
+                  <Checkbox id={`cat-${c.label}`} checked={labels.includes(c.label)} onCheckedChange={(v) => setLabels((l) => (v ? [...l, c.label] : l.filter((x) => x !== c.label)))} />{c.title}
+                </Label>
+              ))}
+            </div>
+          </fieldset>
+          <div className="space-y-2">
+            <Label htmlFor="conf">Minimum confidence <span className="ml-2 font-mono text-xs text-text-2">{conf.toFixed(2)}</span></Label>
+            <input id="conf" type="range" min={0.1} max={0.9} step={0.05} value={conf} onChange={(e) => setConf(Number(e.target.value))} className="w-full accent-[var(--accent)]" />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={busy || !name || !url || !labels.length}>{source ? "Save changes" : "Register source"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

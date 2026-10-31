@@ -9,3 +9,6 @@ data/samples/
 *.sqlite
 .env
 data/*.log
+node_modules/
+.next/
+web/next-env.d.ts
