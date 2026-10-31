@@ -13,3 +13,6 @@ export const time = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", {
 export const dateTime = (iso: string) => new Date(iso).toLocaleString("en-GB", { hour12: false });
 export const conf = (n: number) => n.toFixed(2);
 export const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** "now" / "5m ago": never "now ago". */
+export const agoText = (iso: string | null | undefined) => { const a = ago(iso); return a === "now" || a === "never" ? a : `${a} ago`; };

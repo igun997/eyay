@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { kindOf, sourceInput, reviewInput } from "@/lib/schemas";
 import { can } from "@/lib/roles";
-import { ago } from "@/lib/format";
+import { ago, agoText } from "@/lib/format";
 import { maskCreds } from "@/lib/server/queries";
 
 describe("kindOf", () => {
@@ -56,6 +56,10 @@ describe("format + masking", () => {
     expect(ago("2026-10-31T11:59:00Z", now)).toBe("1m");
     expect(ago("2026-10-31T10:38:00Z", now)).toBe("1h 22m");
     expect(ago(null, now)).toBe("never");
+  });
+  it("agoText never produces \"now ago\"", () => {
+    expect(agoText(new Date().toISOString())).toBe("now");
+    expect(agoText(new Date(Date.now() - 5 * 60000).toISOString())).toBe("5m ago");
   });
   it("maskCreds hides the password but keeps user and host", () => {
     expect(maskCreds({ url: "rtsp://admin:s3cret@10.0.0.5/s" }).url).toBe("rtsp://admin:••••@10.0.0.5/s");

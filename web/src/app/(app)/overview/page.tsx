@@ -86,7 +86,7 @@ export default function OverviewPage() {
               <div><dt className="caps">Online</dt><dd className="mt-1 font-mono">{c.online} / {c.total}</dd></div>
               <div><dt className="caps">Worker</dt><dd className="mt-1 font-mono">{workerOk ? `OK · ${worker!.sources} running` : "DOWN"}</dd></div>
             </dl>
-            {worker?.model && <p className="font-mono text-[11px] text-text-3">Model {worker.model}</p>}
+            {worker?.model && <p className="font-mono text-[11px] text-text-3">Model {worker.model.split("/").pop()}</p>}
           </Panel>
         </div>
       </div>

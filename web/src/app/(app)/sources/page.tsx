@@ -11,7 +11,7 @@ import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { LiveStream } from "@/components/console/live-stream";
 import { EmptyState, ErrorState, LoadingList } from "@/components/console/states";
 import { api, revalidate, useApi } from "@/hooks/use-api";
-import { ago } from "@/lib/format";
+import { ago, agoText } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CategoryRow, SourceRow } from "@/lib/types";
 
@@ -30,7 +30,8 @@ export default function SourcesPage() {
   const cur = data.find((s) => s.id === sel) ?? data[0];
   const online = data.filter((s) => s.enabled && s.status === "online").length;
   const workerOk = !!ov?.worker && Date.now() - new Date(ov.worker.last_seen).getTime() < 20000;
-  const nextCode = `CAM-${String(data.length + 1).padStart(2, "0")}`;
+  const nextNum = Math.max(0, ...data.map((s) => Number(/^CAM-(\d+)$/.exec(s.code)?.[1] ?? 0))) + 1;
+  const nextCode = `CAM-${String(nextNum).padStart(2, "0")}`;
   const toggle = async (s: SourceRow, enabled: boolean) => { try { await api(`/api/sources/${s.id}`, { method: "PATCH", json: { enabled } }); await revalidate("/api/sources"); } catch (e) { toast.error((e as Error).message); } };
 
   return (
@@ -39,8 +40,8 @@ export default function SourcesPage() {
       <div className="px-8 pb-10 space-y-5">
         <Panel title="Detection worker" aside={<StatusChip tone={workerOk ? "ok" : "danger"} dot>{workerOk ? "HEALTHY" : "NOT RESPONDING"}</StatusChip>} bodyClassName="grid grid-cols-3 gap-6 p-5">
           <div><p className="caps">Streams running</p><p className="mt-1 font-mono text-lg">{ov?.worker?.sources ?? 0}</p></div>
-          <div><p className="caps">Model</p><p className="mt-1 font-mono text-lg">{ov?.worker?.model ?? "–"}</p></div>
-          <div><p className="caps">Last heartbeat</p><p className="mt-1 font-mono text-lg">{ov?.worker ? `${ago(ov.worker.last_seen)} ago` : "never"}</p></div>
+          <div><p className="caps">Model</p><p className="mt-1 font-mono text-lg">{ov?.worker?.model?.split("/").pop() ?? "–"}</p></div>
+          <div><p className="caps">Last heartbeat</p><p className="mt-1 font-mono text-lg">{ov?.worker ? `${agoText(ov.worker.last_seen)}` : "never"}</p></div>
         </Panel>
         <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
           <Panel>

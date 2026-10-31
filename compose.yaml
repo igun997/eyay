@@ -27,6 +27,8 @@ services:
     environment:
       DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
       WORKER_ID: worker-1
+      EYEAI_TARGET_FPS: ${EYEAI_TARGET_FPS:-5}      # analysed frames/s per stream
+      EYEAI_ORT_THREADS: ${EYEAI_ORT_THREADS:-}     # ONNX threads per stream (default: auto)
     expose: ["8090"]
 
   mediamtx:

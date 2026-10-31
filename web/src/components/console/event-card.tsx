@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { EventRow } from "@/lib/types";
-import { ago, time } from "@/lib/format";
+import { agoText, time } from "@/lib/format";
 import { SeverityPill } from "./severity-pill";
 import { ClassificationBadge } from "./classification-badge";
 
@@ -18,7 +18,7 @@ export function EventCard({ event, selected, onSelect }: { event: EventRow; sele
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <p className="truncate text-[15px] font-medium">{event.title}</p>
-          <span className="shrink-0 font-mono text-xs text-text-2">{ago(event.detected_at)} ago</span>
+          <span className="shrink-0 font-mono text-xs text-text-2">{agoText(event.detected_at)}</span>
         </div>
         <p className="mt-1 font-mono text-xs text-text-2">{event.source_code} · {event.source_name} · {time(event.detected_at)}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">

@@ -6,7 +6,7 @@ import { SeverityPill } from "@/components/console/severity-pill";
 import { IncidentStatusChip } from "@/components/console/status-chip";
 import { EmptyState, ErrorState, LoadingList, OfflineBanner } from "@/components/console/states";
 import { useApi } from "@/hooks/use-api";
-import { ago } from "@/lib/format";
+import { ago, agoText } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { IncidentRow } from "@/lib/types";
 
@@ -36,7 +36,7 @@ export default function IncidentsPage() {
                       <td><SeverityPill severity={i.severity} /></td>
                       <td><IncidentStatusChip status={i.status} /></td>
                       <td className="text-text-2">{i.assignee_name ?? "Unassigned"}</td>
-                      <td className="pr-5 text-right font-mono text-xs text-text-2">{ago(i.opened_at)} ago</td>
+                      <td className="pr-5 text-right font-mono text-xs text-text-2">{agoText(i.opened_at)}</td>
                     </tr>
                   ))}
                 </tbody>

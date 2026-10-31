@@ -1,3 +1,32 @@
+# eyeai: live RTSP / M3U8 analysis platform
+
+Admins register an RTSP or M3U8 URL; a worker listens, runs YOLOX on the live frames and writes every detection that
+falls in a configured category straight into Postgres. Security reviews them in triage and handles incidents. The live
+view shows the stream with bounding boxes drawn on it. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+UI reference: [docs/design-system](docs/design-system/README.md).
+
+| Image | Source | Role |
+|---|---|---|
+| `eyeai-app` | `docker/web.Dockerfile` (`web/`, Next.js 15 + shadcn/ui) | UI + API, applies DB migrations on boot, seeds the first admin |
+| `eyeai-worker` | `docker/worker.Dockerfile` (`worker/`, reuses `src/eyeai/detect`) | stream listener, detector, events/incidents writer, MJPEG with boxes |
+| `postgres:16-alpine` | upstream | data |
+| `mediamtx` + `jrottenberg/ffmpeg` | upstream, compose profile `dev` only | local RTSP/HLS server fed with `data/samples/*.mp4` for live testing without a camera |
+
+```bash
+scripts/fetch_assets.sh                              # sample videos (dev feed only)
+docker compose --profile dev up --build              # http://localhost:3000  admin@eyeai.local / admin12345
+# Sources & health -> Add source:  rtsp://mediamtx:8554/dock2  |  /gate  |  /aisle
+#                                  http://mediamtx:8888/aisle/index.m3u8   (HLS)
+docker compose up --build                            # production-like: no demo feed, register your own cameras
+```
+
+Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,
+everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: inference
+measured 0.12 s per frame on one idle stream and 0.7-1.7 s per frame with 3 streams sharing 2 cores, so cap it with `EYEAI_TARGET_FPS` and run one worker per ~2 streams per 2 cores.
+One worker per database (no source locking yet). Web tests: `cd web && pnpm test`; worker tests: `PYTHONPATH=src:worker pytest worker/tests`.
+
+---
+
 # eyeai: event-first CCTV + IoT engine (POC)
 
 Engine only; the dashboard and the LLM/VLM reporting agent are deliberately not built yet. It implements the
