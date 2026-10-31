@@ -4,12 +4,11 @@
 FROM python:3.12-slim AS model
 ARG YOLOX_URL=https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx
 ARG YOLOX_SHA256=c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063
-RUN python - <<PY
-import hashlib, os, urllib.request
-data = urllib.request.urlopen(os.environ["YOLOX_URL"], timeout=120).read()
-assert hashlib.sha256(data).hexdigest() == os.environ["YOLOX_SHA256"], "yolox_s.onnx sha256 mismatch"
-open("/yolox_s.onnx", "wb").write(data)
-PY
+COPY docker/fetch_model.py /fetch_model.py
+# Optional `--secret id=ca,src=ca-bundle.crt` for build networks behind a TLS-inspecting proxy.
+RUN --mount=type=secret,id=ca,target=/run/ca.crt,required=false \
+    if [ -s /run/ca.crt ]; then export SSL_CERT_FILE=/run/ca.crt; fi; \
+    python /fetch_model.py "$YOLOX_URL" "$YOLOX_SHA256" /yolox_s.onnx
 
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 \
