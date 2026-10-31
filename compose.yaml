@@ -8,11 +8,23 @@ services:
     ports: ["${DB_PORT:-5432}:5432"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U eyeai"], interval: 3s, timeout: 3s, retries: 20 }
 
+  migrate:             # one-shot: applies db/migrations (idempotent, checksummed, advisory-locked) and seeds the first admin
+    build: { context: ., dockerfile: docker/web.Dockerfile }
+    image: eyeai-app:latest
+    command: ["node", "migrate.cjs"]
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@eyeai.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+    restart: "no"
+
   app:
     build: { context: ., dockerfile: docker/web.Dockerfile }
     image: eyeai-app:latest
-    depends_on: { db: { condition: service_healthy } }
+    depends_on: { migrate: { condition: service_completed_successfully } }
     environment:
+      SKIP_MIGRATE: "1"
       DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
       AUTH_SECRET: ${AUTH_SECRET:-dev-only-secret-change-me-please-32b}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@eyeai.local}
@@ -25,7 +37,7 @@ services:
     image: eyeai-worker:latest
     depends_on:
       db: { condition: service_healthy }
-      app: { condition: service_healthy }                                          # app applies migrations
+      migrate: { condition: service_completed_successfully }
       classifier-init: { condition: service_completed_successfully, required: false }  # only with the classifier profile
     environment:
       DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai

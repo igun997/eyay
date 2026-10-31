@@ -25,4 +25,5 @@ COPY db/migrations /app/migrations
 USER eyeai
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=3s --retries=5 CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["sh", "-c", "node migrate.cjs && node server.js"]
+# migrations run on boot unless a dedicated migrate job does it (compose sets SKIP_MIGRATE=1)
+CMD ["sh", "-c", "[ -n \"$SKIP_MIGRATE\" ] || node migrate.cjs; exec node server.js"]

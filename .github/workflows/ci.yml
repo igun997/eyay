@@ -11,9 +11,16 @@ concurrency:
 
 jobs:
   web:
-    name: Web (typecheck, test, build)
+    name: Web (typecheck, test, build, migrate)
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: web } }
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: eyeai, POSTGRES_PASSWORD: eyeai, POSTGRES_DB: eyeai }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U eyeai" --health-interval 3s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4          # version from web/package.json "packageManager"
@@ -25,6 +32,9 @@ jobs:
       - run: pnpm test
       - run: pnpm build
         env: { DATABASE_URL: "postgres://eyeai:eyeai@localhost:5432/eyeai" }
+      - name: "Migration runner against a real database (run twice, second run must be a no-op)"
+        run: pnpm migrate && pnpm migrate
+        env: { DATABASE_URL: "postgres://eyeai:eyeai@localhost:5432/eyeai", ADMIN_EMAIL: ci@example.com, ADMIN_PASSWORD: ci-password-123 }
 
   python:
     name: Engine + worker tests
@@ -43,8 +53,11 @@ jobs:
       - run: pip install -e '.[dev]' -r worker/requirements.txt
       - name: Models and sample videos (sha256-checked)
         run: scripts/fetch_assets.sh
-      - name: Apply DB schema for the worker integration test
-        run: PGPASSWORD=eyeai psql -h localhost -U eyeai -d eyeai -v ON_ERROR_STOP=1 -f db/migrations/001_init.sql
+      - name: "Apply DB schema twice (migrations must be idempotent) for the worker integration test"
+        run: |
+          for pass in 1 2; do for f in db/migrations/*.sql; do
+            PGPASSWORD=eyeai psql -h localhost -U eyeai -d eyeai -v ON_ERROR_STOP=1 -q -f "$f"
+          done; done
       - run: pytest -q tests worker/tests
         env:
           PYTHONPATH: src:worker
