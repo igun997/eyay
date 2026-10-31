@@ -25,8 +25,8 @@ docker compose up --build                            # production-like: no demo 
 **Classification.** Each detection is queued and sent (cropped around its box) to a System One decision model that answers
 one typed question: `person` / `vehicle` / `false_alarm`. Triage shows both results (`EDGE` and `CLASSIFIER`), flags
 disagreements, and a person still decides; the classifier never dismisses anything. Model chosen from
-[awesome-system-one](https://github.com/andyrewlee/awesome-system-one): **d1-3B** (Apache-2.0-style open weights, text+image, native in
-Ollama `/v1/systemone`), 39/39 on a small crop set at ~3 s/image on 4 CPU cores. Clef-flash (9B) crashed in Ollama's CPU backend on the
+[awesome-system-one](https://github.com/andyrewlee/awesome-system-one): **d1-3B** (text+image, native in Ollama `/v1/systemone`; license is **LFM Open License v1.0**, not Apache: review its commercial-use terms before shipping.
+Apache-2.0 alternatives on that list: Intern-Decision, dohnuts, Clef), 39/39 on a small crop set at ~3 s/image on 4 CPU cores. Clef-flash (9B) crashed in Ollama's CPU backend on the
 test machine. Use any `/v1/systemone` endpoint by setting `CLASSIFIER_URL` / `CLASSIFIER_MODEL`; leave `CLASSIFIER_URL` empty to run without it.
 
 Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,

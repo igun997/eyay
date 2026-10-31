@@ -80,3 +80,49 @@ def td(label="person", track=1, score=0.9, bbox=(0.1, 0.2, 0.3, 0.6)) -> Tracked
 
 def snap():
     return b"jpeg", 640, 360
+
+
+@dataclass
+class FakeClassifierRepo:
+    """In-memory stand-in for the classifier half of PgRepository."""
+
+    events: dict = field(default_factory=dict)  # id -> dict(pipeline, bbox, jpeg, cls_*, cls_error)
+
+    def add(self, event_id: str, jpeg: bytes | None, bbox=None, pipeline: str = "queued"):
+        self.events[event_id] = dict(pipeline=pipeline, bbox=bbox, jpeg=jpeg, cls_error=None, cls_label=None)
+
+    def claim_queued_event(self, exclude=()):
+        from eyeai_worker.classifier import ClassifyJob
+
+        for eid, e in self.events.items():
+            if e["pipeline"] == "queued" and eid not in exclude:
+                e["pipeline"] = "classifying"
+                return ClassifyJob(eid, e["bbox"], e["jpeg"])
+        return None
+
+    def store_classification(self, event_id, result):
+        self.events[event_id].update(pipeline="ready", cls_label=result.label, cls_confidence=result.confidence,
+                                     cls_probs=result.probs, cls_model=result.model, cls_ms=result.ms, cls_error=None)
+
+    def store_classification_failure(self, event_id, error, *, requeue):
+        self.events[event_id].update(pipeline="queued" if requeue else "failed", cls_error=error[:300])
+
+    def skip_all_queued(self):
+        n = 0
+        for e in self.events.values():
+            if e["pipeline"] == "queued":
+                e["pipeline"] = "skipped"
+                n += 1
+        return n
+
+    def recover_stuck_classifying(self, older_than_s):
+        n = 0
+        for e in self.events.values():
+            if e["pipeline"] == "classifying":
+                e["pipeline"] = "queued"
+                n += 1
+        return n
+
+    def classifier_stats(self):
+        return {"queued": sum(e["pipeline"] in ("queued", "classifying") for e in self.events.values()),
+                "failed_recent": sum(e["pipeline"] == "failed" for e in self.events.values())}
