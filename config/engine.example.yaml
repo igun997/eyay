@@ -1,0 +1,29 @@
+# Example engine config: `python -m eyeai run --config config/engine.example.yaml`
+site_id: site-1
+store: data/eyeai.db            # sqlite file (omit for in-memory)
+rules: rules.example.yaml       # relative to this file
+tick_s: 1
+
+adapters:                       # schema: src/eyeai/adapters/registry.py
+  external:                     # signed webhook: POST /events with X-Signature: sha256=<hmac>
+    secret: change-me
+    port: 8089
+  # cameras:                    # native AI events (use `python -m eyeai discover <host>` first)
+  #   - {device_id: cam-gate-01, vendor: isapi, host: 192.168.1.64, username: admin, password: "..."}
+  # mqtt_sensors:
+  #   device_id: broker-1
+  #   host: 127.0.0.1
+  #   sensors:
+  #     - {sensor_id: sensor-cold-01, kind: temperature, topic: sensors/cold/temp, zone: cold_store}
+
+video:                          # local inference, ONLY for labels native sources do not cover
+  - device_id: cam-gate-01
+    source: data/samples/car-detection.mp4   # or rtsp://user:pass@host/stream
+    model: data/models/yolox_s.onnx          # Apache-2.0 YOLOX (see README for download)
+    labels: [car, person, truck, bus]
+    native_labels: []           # labels a native source already covers (from `discover`)
+    target_fps: 5
+    conf: 0.3
+    realtime: false             # true for live RTSP; false = process a file as fast as possible
+    zones: [{name: gate, polygon: [[0, 0.3], [1, 0.3], [1, 1], [0, 1]]}]
+    lines: [{name: mid, p1: [0, 0.6], p2: [1, 0.6]}]

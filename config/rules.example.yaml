@@ -1,0 +1,99 @@
+# Example rule-engine configuration. Every key is validated (unknown keys are errors).
+# Times are local to `schedule.timezone`; all event timestamps are UTC internally.
+
+site_id: site-1
+
+# Native analytics events carry no zone. Map the camera / sensor device ids to zones here.
+zones_by_device:
+  cam-gate-01: gate
+  cam-cold-01: cold_store
+  cam-floor-01: floor
+  cam-dock-01: dock
+  sensor-cold-01: cold_store
+  sensor-power-01: floor
+  sensor-vib-01: machine_hall
+  sensor-count-01: checkout
+
+# Opening hours. Overnight windows are rejected; a day absent from `hours` is closed.
+schedule:
+  timezone: Asia/Jakarta
+  hours:
+    mon: ["08:00-18:00"]
+    tue: ["08:00-18:00"]
+    wed: ["08:00-18:00"]
+    thu: ["08:00-18:00"]
+    fri: ["08:00-18:00"]
+    sat: ["08:00-18:00"]
+
+# Events older than this (relative to the event-time watermark) are rejected at ingest.
+late_tolerance_s: 60
+
+# Sensor readings outside these ranges are rejected at ingest (sensor fault guard).
+plausibility:
+  temperature_c: [-60, 80]
+  power_w: [0, 1000000]
+  vibration_rms: [0, 1000]
+  count: [0, 10000]
+
+dedup:
+  window_s: 5
+
+zone_dwell:
+  min_dwell_s: 300
+  zones: []          # empty = all zones
+
+line_count:
+  bucket_s: 3600     # hourly buckets
+  grace_s: 60
+
+occupancy:
+  capacity:
+    checkout: 12
+    floor: 80
+  presence_ttl_s: 30
+
+after_hours:
+  zones: [floor, cold_store, machine_hall]
+  cooldown_s: 300
+
+energy_waste:
+  zones: [floor]
+  watts_threshold: 2000
+  sustained_s: 1800
+  idle_s: 1800
+
+dock_reconciliation:
+  gate_zone: gate
+  match_window_s: 1800
+  grace_s: 900
+  ocr_tolerance: 1
+
+cold_chain:
+  zones:
+    - zone: cold_store
+      min_c: 2
+      max_c: 8
+      sustained_s: 300
+      stale_s: 900
+
+machine_anomaly:
+  alpha: 0.05
+  warmup: 30
+  z_threshold: 4.0
+  consecutive: 3
+
+queue_monitor:
+  zones: [checkout]
+  threshold: 8
+  sustained_s: 120
+
+device_health:
+  expected_devices: [cam-gate-01, cam-cold-01, cam-floor-01, cam-dock-01, sensor-cold-01]
+  stale_s: 120
+
+escalation:
+  escalate_after_s: 600
+
+incident_correlator:
+  window_s: 300
+  min_members: 2

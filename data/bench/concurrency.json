@@ -1,0 +1,245 @@
+[
+  {
+    "model": "yolox_nano",
+    "video": "car-detection.mp4",
+    "streams": 1,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 0.7333020080041024,
+        "fps": 40.91083847111485
+      }
+    ],
+    "total_fps": 40.897258588633235,
+    "min_stream_fps": 40.91083847111485,
+    "sustained": true,
+    "cpu_percent": 396.7034083097423,
+    "rss_mb": 171.45703125
+  },
+  {
+    "model": "yolox_nano",
+    "video": "car-detection.mp4",
+    "streams": 2,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 1.1775102489991696,
+        "fps": 25.477485249490307
+      },
+      {
+        "stream": 1,
+        "frames": 30,
+        "seconds": 1.0510057470019092,
+        "fps": 28.544087494837935
+      }
+    ],
+    "total_fps": 50.93604927305875,
+    "min_stream_fps": 25.477485249490307,
+    "sustained": true,
+    "cpu_percent": 657.9239697770089,
+    "rss_mb": 221.47265625
+  },
+  {
+    "model": "yolox_nano",
+    "video": "car-detection.mp4",
+    "streams": 4,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 2.2055967710039113,
+        "fps": 13.601760935814681
+      },
+      {
+        "stream": 1,
+        "frames": 30,
+        "seconds": 2.957138366000436,
+        "fps": 10.144942943801222
+      },
+      {
+        "stream": 2,
+        "frames": 30,
+        "seconds": 2.905530254000041,
+        "fps": 10.325137712367312
+      },
+      {
+        "stream": 3,
+        "frames": 30,
+        "seconds": 3.0112109100009548,
+        "fps": 9.962769429521789
+      }
+    ],
+    "total_fps": 39.84334876887599,
+    "min_stream_fps": 9.962769429521789,
+    "sustained": true,
+    "cpu_percent": 678.9970686029284,
+    "rss_mb": 312.33203125
+  },
+  {
+    "model": "yolox_tiny",
+    "video": "car-detection.mp4",
+    "streams": 1,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 1.2754098060031538,
+        "fps": 23.5218514541716
+      }
+    ],
+    "total_fps": 23.516749774902024,
+    "min_stream_fps": 23.5218514541716,
+    "sustained": true,
+    "cpu_percent": 406.05587944664217,
+    "rss_mb": 310.66015625
+  },
+  {
+    "model": "yolox_tiny",
+    "video": "car-detection.mp4",
+    "streams": 2,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 2.314478157000849,
+        "fps": 12.96188512700187
+      },
+      {
+        "stream": 1,
+        "frames": 30,
+        "seconds": 2.356929890003812,
+        "fps": 12.728422736389277
+      }
+    ],
+    "total_fps": 25.45310549369166,
+    "min_stream_fps": 12.728422736389277,
+    "sustained": true,
+    "cpu_percent": 712.6869538233664,
+    "rss_mb": 364.27734375
+  },
+  {
+    "model": "yolox_tiny",
+    "video": "car-detection.mp4",
+    "streams": 4,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 6.181349888000113,
+        "fps": 4.853308831172808
+      },
+      {
+        "stream": 1,
+        "frames": 30,
+        "seconds": 6.735768240992911,
+        "fps": 4.453834948985379
+      },
+      {
+        "stream": 2,
+        "frames": 30,
+        "seconds": 6.654157320997911,
+        "fps": 4.508459682089536
+      },
+      {
+        "stream": 3,
+        "frames": 30,
+        "seconds": 7.01028339300683,
+        "fps": 4.279427566355843
+      }
+    ],
+    "total_fps": 17.11635465367423,
+    "min_stream_fps": 4.279427566355843,
+    "sustained": false,
+    "cpu_percent": 679.5192797508669,
+    "rss_mb": 480.4921875
+  },
+  {
+    "model": "yolox_s",
+    "video": "car-detection.mp4",
+    "streams": 1,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 5.129533953004284,
+        "fps": 5.848484535798714
+      }
+    ],
+    "total_fps": 5.848124588079132,
+    "min_stream_fps": 5.848484535798714,
+    "sustained": true,
+    "cpu_percent": 401.96109668730577,
+    "rss_mb": 501.9296875
+  },
+  {
+    "model": "yolox_s",
+    "video": "car-detection.mp4",
+    "streams": 2,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 10.042002775997389,
+        "fps": 2.987451872818303
+      },
+      {
+        "stream": 1,
+        "frames": 30,
+        "seconds": 9.923293576001015,
+        "fps": 3.0231898079236
+      }
+    ],
+    "total_fps": 5.974657034967865,
+    "min_stream_fps": 2.987451872818303,
+    "sustained": false,
+    "cpu_percent": 689.4754218352917,
+    "rss_mb": 593.28125
+  },
+  {
+    "model": "yolox_s",
+    "video": "car-detection.mp4",
+    "streams": 4,
+    "target_fps": 5.0,
+    "per_stream": [
+      {
+        "stream": 0,
+        "frames": 30,
+        "seconds": 26.096143045993813,
+        "fps": 1.1495951699500473
+      },
+      {
+        "stream": 1,
+        "frames": 30,
+        "seconds": 25.590822318998107,
+        "fps": 1.172295271564158
+      },
+      {
+        "stream": 2,
+        "frames": 30,
+        "seconds": 26.79982111699792,
+        "fps": 1.11941045684713
+      },
+      {
+        "stream": 3,
+        "frames": 30,
+        "seconds": 26.93517652900482,
+        "fps": 1.1137851637131415
+      }
+    ],
+    "total_fps": 4.455033111208078,
+    "min_stream_fps": 1.1137851637131415,
+    "sustained": false,
+    "cpu_percent": 697.658185215185,
+    "rss_mb": 835.48046875
+  }
+]

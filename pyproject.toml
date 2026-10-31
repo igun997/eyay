@@ -1,0 +1,35 @@
+[project]
+name = "eyeai"
+version = "0.1.0"
+description = "POC: event-first CCTV + IoT + read-only agent platform (see Analisis Kelayakan PDF)"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "paho-mqtt>=2",
+  "pydantic>=2",
+  "httpx",
+  "numpy",
+  "opencv-python-headless",
+  "onnxruntime",
+  "pyyaml",
+  "scipy",
+  "lap",
+  "pymodbus>=3.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+openvino = ["openvino"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
