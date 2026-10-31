@@ -218,3 +218,31 @@ def test_indication_rule_recorded_but_not_triggered_when_the_burst_is_too_short_
     repo2, bm2, rec2 = start(rules=[LINGER_RULE])
     play(bm2, [(2, frame(moved(0.1))), (4, frame(moved(0.2))), (6, frame(moved(0.3)))])  # moving, not lingering
     assert repo2.ev[rec2.event_id]["flags"][0]["triggered"] is False
+
+
+# ---- the tracker hands out a new id when a person moves a lot: follow the nearest box ------------------------------
+def test_follows_the_object_when_the_tracker_gives_it_a_new_id():
+    repo, bm, rec = start()
+    # id 7, 8, 9: new track ids at every sample, each box close (< 0.25) to the previous one, drifting right
+    play(bm, [(2, frame(moved(0.05), track=7)), (4, frame(moved(0.10), track=8)), (6, frame(moved(0.15), track=9))])
+    snaps = [s for s in repo.snaps if s["event_id"] == rec.event_id]
+    assert all(s["bbox"] is not None for s in snaps)
+    b = repo.bursts[rec.event_id]
+    assert b["kind"] == "moving" and b["indication"] == "Person moving across the frame for 6.0 s"
+
+
+def test_does_not_jump_to_a_far_away_person_when_the_track_is_lost():
+    repo, bm, rec = start()
+    play(bm, [(2, frame(moved(0.45), track=7)), (4, frame(moved(0.45), track=8)), (6, frame(moved(0.45), track=9))])   # 0.45 away
+    snaps = [s for s in repo.snaps if s["event_id"] == rec.event_id]
+    assert all(s["bbox"] is None for s in snaps[1:]) and repo.bursts[rec.event_id]["kind"] == "appeared"
+
+
+def test_picks_the_nearest_of_several_candidates_and_prefers_the_same_id():
+    from eyeai_worker.burst import follow, box_of
+    last = box_of(td("person", 1, bbox=BOX))
+    near, far = td("person", 5, bbox=moved(0.04)), td("person", 6, bbox=moved(0.2))
+    assert follow([far, near], "person", 99, last).track_id == 5          # id gone -> nearest
+    assert follow([far, near], "person", 6, last).track_id == 6           # id present -> that one, even if farther
+    assert follow([], "person", 1, last) is None and follow([near], "person", 5, None).track_id == 5   # same id wins without a last box
+    assert follow([near], "person", 99, None) is None

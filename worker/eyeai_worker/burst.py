@@ -26,6 +26,7 @@ MOVE_THRESHOLD = 0.08          # normalised centre displacement
 LINGER_MIN_MS = 3000
 CROWD_MIN = 3
 MAX_PENDING = 20
+FOLLOW_MAX_DIST = 0.25         # re-associate a lost track id with the nearest same-label box within this centre distance
 SnapshotFn = Callable[[], tuple[bytes, int, int]]
 BBox = dict[str, float]
 
@@ -43,6 +44,21 @@ def box_of(t: TrackedDetection) -> BBox:
 
 def _centre(b: BBox) -> tuple[float, float]:
     return b["x"] + b["w"] / 2, b["y"] + b["h"] / 2
+
+
+def follow(tracked: Sequence[TrackedDetection], label: str, track_id: int, last: BBox | None) -> TrackedDetection | None:
+    """The detection of our track in this frame. The IoU tracker hands out a new id when a person moves a lot between
+    frames (common at 1-3 fps), so when the id is gone fall back to the nearest same-label box to where we last saw it."""
+    same = [t for t in tracked if t.detection.label == label]
+    for t in same:
+        if t.track_id == track_id:
+            return t
+    if last is None or not same:
+        return None
+    lx, ly = _centre(last)
+    best = min(same, key=lambda t: math.hypot(_centre(box_of(t))[0] - lx, _centre(box_of(t))[1] - ly))
+    cx, cy = _centre(box_of(best))
+    return best if math.hypot(cx - lx, cy - ly) <= FOLLOW_MAX_DIST else None
 
 
 def classify_burst(
@@ -80,6 +96,7 @@ class _Pending:
     last_ms: int = 0
     last_count: int = 0
     errors: int = 0
+    last_box: BBox | None = None                     # last box seen, to follow the object when the tracker changes its id
 
     def due_ms(self) -> float:
         return self.taken * self.burst_s * 1000 / (self.frames - 1)
@@ -118,7 +135,8 @@ class BurstManager:
         track = next((t for t in tracked if t.detection.label == rec.label and t.track_id == rec.track_id), None)
         p = _Pending(rec.event_id, rec.incident_id, rec.label, cat.title if cat else rec.label.capitalize(), rec.track_id,
                      now, frames, burst_s, boxes=[box_of(track) if track else None],
-                     last_count=sum(1 for t in tracked if t.detection.label == rec.label))
+                     last_count=sum(1 for t in tracked if t.detection.label == rec.label),
+                     last_box=box_of(track) if track else None)
         if frames <= 1 or burst_s <= 0 or len(self._pending) >= self._max_pending:
             if len(self._pending) >= self._max_pending and frames > 1 and burst_s > 0:
                 log.warning("%s: %d bursts pending, event %s keeps a single snapshot", self.source.code, len(self._pending), rec.event_id[:8])
@@ -137,8 +155,10 @@ class BurstManager:
                 continue
             if snap is None:
                 snap = snapshot()
-            track = next((t for t in tracked if t.detection.label == p.label and t.track_id == p.track_id), None)
+            track = follow(tracked, p.label, p.track_id, p.last_box)
             box = box_of(track) if track else None
+            if track:
+                p.track_id, p.last_box = track.track_id, box
             count = sum(1 for t in tracked if t.detection.label == p.label)
             try:
                 with self._repo.transaction() as tx:
