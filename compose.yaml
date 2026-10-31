@@ -41,6 +41,8 @@ services:
     image: jrottenberg/ffmpeg:6.1-alpine
     entrypoint: ["/bin/sh", "/feeder.sh"]
     depends_on: [mediamtx]
+    environment:
+      STREAMS: ${FEED_STREAMS:-dock2}   # one stream by default; e.g. FEED_STREAMS="dock2 gate aisle"
     volumes: ["./data/samples:/samples:ro", "./docker/feeder.sh:/feeder.sh:ro"]
     # register in the UI:  rtsp://mediamtx:8554/dock2 | /gate | /aisle
     #                      http://mediamtx:8888/dock2/index.m3u8   (same feed as HLS)

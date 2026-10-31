@@ -11,6 +11,12 @@ fetch() { # url dest sha256
   echo "got  $2"
 }
 
+V=https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master
+if [[ "${1:-}" == "e2e" ]]; then   # CI / e2e: one sample video, no local models (the worker image bundles its own)
+  fetch "$V/person-bicycle-car-detection.mp4" data/samples/person-bicycle-car-detection.mp4 452b11b7e0efbd019f1d9570d0c790e90416ad4ad29eec6003872d08443140ef
+  exit 0
+fi
+
 R=https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0
 fetch "$R/yolox_s.onnx"    data/models/yolox_s.onnx    c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063
 fetch "$R/yolox_tiny.onnx" data/models/yolox_tiny.onnx 427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7

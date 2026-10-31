@@ -12,7 +12,12 @@ push() { # name file
   done
 }
 
-push dock2 person-bicycle-car-detection.mp4 &
-push gate  car-detection.mp4 &
-push aisle store-aisle-detection.mp4 &
+# STREAMS: space separated subset of "dock2 gate aisle" (default: just dock2 = one stream)
+for s in ${STREAMS:-dock2}; do
+  case "$s" in
+    dock2) push dock2 person-bicycle-car-detection.mp4 & ;;
+    gate)  push gate  car-detection.mp4 & ;;
+    aisle) push aisle store-aisle-detection.mp4 & ;;
+  esac
+done
 wait
