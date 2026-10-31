@@ -115,11 +115,15 @@ try {
     await sec.waitForSelector("[data-sonner-toast]");
   });
 
-  await step("incident has camera + triage entries in its timeline", async () => {
-    const r = await (await sec.request.get(`${BASE}/api/incidents/${ev.incident_id}`)).json();
+  await step("the confirmed event's incident has camera + triage entries in its timeline", async () => {
+    // triage confirms the newest event, which may differ from the one found earlier: look up what was really confirmed
+    const { events } = await (await sec.request.get(`${BASE}/api/events?tab=resolved`)).json();
+    const done = events.find((e) => e.status === "confirmed" && e.source_id === sourceId);
+    assert(done && done.incident_id, "no confirmed event with an incident");
+    const r = await (await sec.request.get(`${BASE}/api/incidents/${done.incident_id}`)).json();
     const kinds = r.timeline.map((t) => t.kind);
     assert(kinds.includes("camera") && kinds.includes("triage"), `timeline kinds: ${kinds}`);
-    await sec.goto(`${BASE}/incidents/${ev.incident_code}`); await sec.waitForSelector("text=Timeline");
+    await sec.goto(`${BASE}/incidents/${done.incident_code}`); await sec.waitForSelector("text=Timeline");
     await sec.screenshot({ path: `${OUT}/incident.png` });
   });
 

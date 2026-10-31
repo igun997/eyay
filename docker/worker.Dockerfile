@@ -16,7 +16,9 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 \
     EYEAI_MODEL=/app/data/models/yolox_s.onnx PORT=8090
 WORKDIR /app
 COPY worker/requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN --mount=type=secret,id=ca,target=/run/ca.crt,required=false \
+    if [ -s /run/ca.crt ]; then export PIP_CERT=/run/ca.crt; fi; \
+    pip install -r /tmp/requirements.txt
 COPY src/eyeai /app/src/eyeai
 COPY worker/eyeai_worker /app/worker/eyeai_worker
 COPY --from=model /yolox_s.onnx /app/data/models/yolox_s.onnx

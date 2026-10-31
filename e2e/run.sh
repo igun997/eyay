@@ -4,14 +4,16 @@
 #   NO_BUILD=1 e2e/run.sh reuse already built eyeai-app / eyeai-worker images
 set -euo pipefail
 cd "$(dirname "$0")/.."
+ROOT=$PWD
 export FEED_STREAMS=dock2 COMPOSE_PROJECT_NAME=eyeai-e2e
 scripts/fetch_assets.sh e2e
-cleanup() { docker compose --profile dev logs --no-color --tail=80 worker app > e2e/out/stack.log 2>&1 || true; docker compose --profile dev down -v >/dev/null 2>&1; }
-mkdir -p e2e/out
+cleanup() { docker compose --profile dev logs --no-color --tail=80 worker app > "$ROOT/e2e/out/stack.log" 2>&1 || true; docker compose --profile dev down -v >/dev/null 2>&1; }
+mkdir -p "$ROOT/e2e/out"
 trap cleanup EXIT
 UP=(up -d --build); [ -z "${NO_BUILD:-}" ] || UP=(up -d --no-build)
 docker compose --profile dev "${UP[@]}"
 cd e2e
-# SKIP_NPM=1 when playwright is already resolvable (e.g. NODE_PATH to a global install)
+# SKIP_NPM=1: use a playwright that is already installed globally (symlinked in)
+if [ -n "${SKIP_NPM:-}" ] && [ ! -e node_modules/playwright ]; then mkdir -p node_modules; ln -s "$(npm root -g)/playwright" node_modules/playwright; fi
 [ -d node_modules ] || [ -n "${SKIP_NPM:-}" ] || npm install --no-audit --no-fund
 E2E_OUT=out node smoke.mjs
