@@ -1,12 +1,13 @@
 import { query, one } from "./db";
-import type { CategoryRow, EventRow, IncidentRow, SourceRow, TimelineRow, UserRow } from "../types";
+import type { BehaviorRule, CategoryRow, EventRow, Frame, IncidentRow, SourceRow, TimelineRow, UserRow } from "../types";
 
 const EVENT_SELECT = `
   SELECT e.id, e.code, e.title, e.label, e.confidence, e.severity, e.status, e.bbox, e.detected_at,
          e.source_id, s.code AS source_code, s.name AS source_name,
          e.incident_id, i.code AS incident_code, e.dismiss_reason, e.note, e.track_id,
          (SELECT count(*)::int FROM event_snapshots x WHERE x.event_id = e.id) AS snapshots,
-         e.pipeline, e.cls_label, e.cls_confidence, e.cls_probs, e.cls_model, e.cls_ms, e.cls_error
+         e.pipeline, e.cls_label, e.cls_confidence, e.cls_probs, e.cls_model, e.cls_ms, e.cls_error,
+         e.indication_kind, e.indication, e.burst_ms, e.burst_done, e.cls_flags, e.suspicious
   FROM events e
   JOIN sources s ON s.id = e.source_id
   LEFT JOIN incidents i ON i.id = e.incident_id`;
@@ -114,3 +115,10 @@ export async function overview() {
 
 /** Strip user:password from stream URLs. Only admins (who register them) get the real value. */
 export const maskCreds = <T extends { url: string }>(s: T): T => ({ ...s, url: s.url.replace(/\/\/([^:@/]+):([^@/]+)@/, "//$1:••••@") });
+
+export const listBehaviorRules = () => query<BehaviorRule>("SELECT key,title,description,kind,question,applies_to,threshold,severity,opens_incident,enabled FROM behavior_rules ORDER BY position");
+
+export const listFrames = (eventIds: string[]) =>
+  eventIds.length
+    ? query<Frame>("SELECT event_id, idx, offset_ms, bbox FROM event_snapshots WHERE event_id = ANY($1::uuid[]) ORDER BY event_id, idx", [eventIds])
+    : Promise.resolve([] as Frame[]);

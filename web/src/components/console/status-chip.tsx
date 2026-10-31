@@ -11,11 +11,11 @@ const tones: Record<Tone, string> = {
 };
 
 /** Outlined mono chip. Used for pipeline status, incident status, health. */
-export function StatusChip({ children, tone = "neutral", icon: Icon, dot, className }: {
-  children: React.ReactNode; tone?: Tone; icon?: LucideIcon; dot?: boolean; className?: string;
+export function StatusChip({ children, tone = "neutral", icon: Icon, dot, className, title }: {
+  children: React.ReactNode; tone?: Tone; icon?: LucideIcon; dot?: boolean; className?: string; title?: string;
 }) {
   return (
-    <span className={cn("inline-flex h-5 items-center gap-1.5 rounded-sm border px-2 font-mono text-[11px] uppercase tracking-wider whitespace-nowrap", tones[tone], className)}>
+    <span title={title} className={cn("inline-flex h-5 items-center gap-1.5 rounded-sm border px-2 font-mono text-[11px] uppercase tracking-wider whitespace-nowrap", tones[tone], className)}>
       {dot && <span className="size-1.5 rounded-full bg-current" aria-hidden />}
       {Icon && <Icon className="size-3" aria-hidden />}
       {children}

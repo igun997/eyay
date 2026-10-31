@@ -20,7 +20,9 @@ import { api, revalidate, useApi } from "@/hooks/use-api";
 import { dateTime, time } from "@/lib/format";
 import { agreement, clsLabelText } from "@/lib/classification";
 import { dismissReasons } from "@/lib/schemas";
-import type { EventRow, SourceRow } from "@/lib/types";
+import type { EventRow, Frame, SourceRow } from "@/lib/types";
+import { FrameStrip } from "@/components/console/frame-strip";
+import { BehaviorIndicators, IndicationLine } from "@/components/console/indicators";
 import { cn } from "@/lib/utils";
 
 type Tab = "needs_review" | "in_pipeline" | "resolved";
@@ -46,8 +48,12 @@ export default function TriagePage() {
   const { data: sources } = useApi<SourceRow[]>("/api/sources", 15000);
 
   const events = data?.events ?? [];
+  const [frameIdx, setFrameIdx] = useState(0);
   const current = useMemo(() => events.find((e) => e.id === sel) ?? events[0] ?? null, [events, sel]);
   useEffect(() => { if (current && current.id !== sel) setSel(current.id); }, [current, sel]);
+  const { data: frames } = useApi<Frame[]>(current ? `/api/events/${current.id}/frames` : null, current && !current.burst_done ? 2500 : 60000);
+  useEffect(() => { setFrameIdx(0); }, [current?.id]);
+  const frame = frames?.find((f) => f.idx === frameIdx) ?? frames?.[0];
 
   async function review(decision: "confirm" | "dismiss" | "reopen") {
     if (!current) return;
@@ -94,7 +100,9 @@ export default function TriagePage() {
                 <p className="mt-1 font-mono text-xs text-text-2">{current.source_code} · {current.source_name} · {time(current.detected_at)} · {current.code}</p>
                 <div className="mt-3 flex items-center gap-2"><SeverityPill severity={current.severity} /><PipelineStatusChip status={current.status === "ready_for_triage" ? current.pipeline : current.status} /></div>
               </div>
-              {current.snapshots > 0 && <DetectionImage src={`/api/events/${current.id}/snapshot/0`} bbox={current.bbox} label={current.label} confidence={current.confidence} />}
+              {current.snapshots > 0 && <DetectionImage src={`/api/events/${current.id}/snapshot/${frame?.idx ?? 0}`} bbox={frame ? frame.bbox : current.bbox} label={current.label} confidence={frame?.idx ? undefined : current.confidence} />}
+              {frames && <FrameStrip frames={frames} active={frame?.idx ?? 0} onSelect={setFrameIdx} />}
+              <IndicationLine kind={current.indication_kind} text={current.indication} burstMs={current.burst_ms} done={current.burst_done} />
               <div>
                 <p className="caps border-b border-border pb-2">Classification</p>
                 <div className="flex items-center justify-between border-b border-border py-3">
@@ -115,6 +123,7 @@ export default function TriagePage() {
                   </p>
                 )}
               </div>
+              <BehaviorIndicators flags={current.cls_flags ?? []} />
               <div>
                 <p className="caps border-b border-border pb-2">Context</p>
                 <dl className="grid grid-cols-[100px_1fr_100px_1fr] gap-y-2 py-3 text-sm">

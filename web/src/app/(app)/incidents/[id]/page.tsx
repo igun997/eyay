@@ -15,20 +15,24 @@ import { DetectionImage } from "@/components/console/detection-image";
 import { ErrorState, LoadingList } from "@/components/console/states";
 import { api, revalidate, useApi } from "@/hooks/use-api";
 import { time } from "@/lib/format";
-import type { EventRow, IncidentRow, TimelineRow } from "@/lib/types";
+import type { EventRow, Frame, IncidentRow, TimelineRow } from "@/lib/types";
+import { IndicationLine } from "@/components/console/indicators";
 
-type Detail = { incident: IncidentRow; timeline: TimelineRow[]; events: EventRow[]; assignees: { id: string; name: string; role: string }[] };
+type Detail = { incident: IncidentRow; timeline: TimelineRow[]; events: EventRow[]; frames: Frame[]; assignees: { id: string; name: string; role: string }[] };
 
 export default function IncidentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data, error, loading, refresh } = useApi<Detail>(`/api/incidents/${id}`, 4000);
   const [note, setNote] = useState("");
-  const [preview, setPreview] = useState<EventRow | null>(null);
+  const [preview, setPreview] = useState<{ eventId: string; idx: number } | null>(null);
   if (loading) return <LoadingList />;
   if (!data) return <ErrorState title="Incident not found" message={error?.message} onRetry={() => refresh()} />;
-  const { incident: i, timeline, events, assignees } = data;
+  const { incident: i, timeline, events, frames, assignees } = data;
   const evById = new Map(events.map((e) => [e.id, e]));
-  const shown = preview ?? events[0] ?? null;
+  const firstFrame = frames[0];
+  const pick = preview ?? (firstFrame ? { eventId: firstFrame.event_id, idx: firstFrame.idx } : null);
+  const shown = pick ? events.find((e) => e.id === pick.eventId) ?? null : null;
+  const shownFrame = pick ? frames.find((f) => f.event_id === pick.eventId && f.idx === pick.idx) : undefined;
 
   const act = async (json: object, ok: string) => {
     try { await api(`/api/incidents/${i.id}/action`, { method: "POST", json }); toast.success(ok); await revalidate("/api/"); } catch (e) { toast.error((e as Error).message); }
@@ -61,7 +65,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
             const e = r.event_id ? evById.get(r.event_id) : null;
             if (!e || r.kind !== "camera" || e.snapshots === 0) return null;
             return (
-              <button type="button" onClick={() => setPreview(e)} className="mt-3 flex items-center gap-3 text-left">
+              <button type="button" onClick={() => setPreview({ eventId: e.id, idx: 0 })} className="mt-3 flex items-center gap-3 text-left">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={`/api/events/${e.id}/snapshot/0`} alt="" className="h-16 w-24 rounded-sm border border-border-strong object-cover" />
                 <ClassificationBadge label={e.label} confidence={e.confidence} source="EDGE" />
@@ -80,12 +84,14 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
             </dl>
           </Panel>
           <Panel title="Evidence" bodyClassName="space-y-3 p-5">
-            {shown?.snapshots ? <DetectionImage src={`/api/events/${shown.id}/snapshot/0`} bbox={shown.bbox} label={shown.label} confidence={shown.confidence} /> : <p className="text-sm text-text-2">No snapshots.</p>}
-            <div className="grid grid-cols-3 gap-2">
-              {events.filter((e) => e.snapshots).slice(0, 6).map((e) => (
-                <button key={e.id} onClick={() => setPreview(e)} aria-label={`Show ${e.code}`} className={`overflow-hidden rounded-sm border ${shown?.id === e.id ? "border-brand" : "border-border"}`}>
+            {shown && pick ? <DetectionImage src={`/api/events/${shown.id}/snapshot/${pick.idx}`} bbox={shownFrame?.bbox ?? null} label={shown.label} confidence={pick.idx === 0 ? shown.confidence : undefined} /> : <p className="text-sm text-text-2">No snapshots.</p>}
+            {shown && <IndicationLine kind={shown.indication_kind} text={shown.indication} burstMs={shown.burst_ms} done={shown.burst_done} />}
+            <div className="grid grid-cols-4 gap-2">
+              {frames.slice(0, 12).map((f) => (
+                <button key={`${f.event_id}-${f.idx}`} onClick={() => setPreview({ eventId: f.event_id, idx: f.idx })} aria-label={`Show ${events.find((e) => e.id === f.event_id)?.code} frame ${f.idx + 1}`}
+                  className={`overflow-hidden rounded-sm border ${pick?.eventId === f.event_id && pick.idx === f.idx ? "border-brand" : "border-border"}`}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/api/events/${e.id}/snapshot/0`} alt="" className="aspect-video w-full object-cover" />
+                  <img src={`/api/events/${f.event_id}/snapshot/${f.idx}`} alt="" className="aspect-video w-full object-cover" loading="lazy" />
                 </button>
               ))}
             </div>

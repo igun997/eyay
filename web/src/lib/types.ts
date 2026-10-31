@@ -3,6 +3,7 @@ export type EventStatus = "ready_for_triage" | "confirmed" | "dismissed";
 export type IncidentStatus = "open" | "acknowledged" | "resolved";
 export type Pipeline = "queued" | "classifying" | "ready" | "failed" | "skipped";
 export type ClsLabel = "person" | "vehicle" | "false_alarm";
+export type IndicationKind = "appeared" | "moving" | "lingering" | "crowd";
 export type SourceStatus = "pending" | "connecting" | "online" | "offline" | "error";
 export type SourceKind = "rtsp" | "m3u8";
 
@@ -34,6 +35,22 @@ export type EventRow = {
   cls_model: string | null;
   cls_ms: number | null;
   cls_error: string | null;
+  indication_kind: IndicationKind | null;
+  indication: string | null;
+  burst_ms: number | null;
+  burst_done: boolean;
+  cls_flags: Flag[];
+  suspicious: boolean;
+};
+
+/** One evaluated behaviour rule for an event (stored in events.cls_flags). */
+export type Flag = { rule: string; title: string; prob: number | null; threshold: number; severity: Severity; triggered: boolean };
+
+export type Frame = { event_id: string; idx: number; offset_ms: number; bbox: BBox | null };
+
+export type BehaviorRule = {
+  key: string; title: string; description: string; kind: "classifier" | "indication"; question: string | null;
+  applies_to: string[]; threshold: number; severity: Severity; opens_incident: boolean; enabled: boolean;
 };
 
 export type IncidentRow = {
@@ -85,6 +102,8 @@ export type CategoryRow = {
   severity: Severity;
   opens_incident: boolean;
   cooldown_s: number;
+  burst_s: number;
+  burst_frames: number;
   enabled: boolean;
 };
 
