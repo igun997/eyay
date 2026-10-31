@@ -8,3 +8,4 @@ data/samples/
 *.db
 *.sqlite
 .env
+data/*.log
