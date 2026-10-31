@@ -7,6 +7,7 @@ from typing import Callable
 
 from eyeai.detect.yolox import YoloxDetector
 
+from .behavior import RuleCache
 from .config import Settings
 from .models import Category, SourceInfo
 from .repo import Repository
@@ -35,7 +36,10 @@ class WorkerManager:
         self.repo = repo
         self.settings = settings
         self._factory = detector_factory or yolox_factory(settings.model, settings.ort_threads)
-        self._runner_kwargs = {"target_fps": settings.target_fps, "stall_s": settings.stall_s, **(runner_kwargs or {})}
+        self._rules = RuleCache(repo)
+        self._runner_kwargs = {
+            "target_fps": settings.target_fps, "stall_s": settings.stall_s, "rules": self._rules.get, **(runner_kwargs or {}),
+        }
         self._runners: dict[str, SourceRunner] = {}
         self._categories: dict[str, Category] = {}
         self._lock = threading.Lock()

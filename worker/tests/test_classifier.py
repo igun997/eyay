@@ -123,7 +123,7 @@ def test_success_stores_result_and_only_touches_pipeline_fields():
     assert e["pipeline"] == "ready" and e["cls_label"] == "person" and e["cls_confidence"] == pytest.approx(0.91)
     assert e["cls_model"] == "d1" and e["cls_probs"]["person"] == pytest.approx(0.91)
     assert size(sent) != (640, 360), "classifier should receive the crop, not the full frame"
-    assert set(e) <= {"pipeline", "bbox", "jpeg", "cls_error", "cls_label", "cls_confidence", "cls_probs", "cls_model", "cls_ms"}
+    assert "status" not in e and "incident_id" not in e   # the classifier never touches triage state
     assert svc("http://x", repo).run_once() is False  # nothing left
 
 

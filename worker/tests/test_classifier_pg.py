@@ -128,8 +128,8 @@ def test_two_services_never_classify_the_same_event_twice(db, repo):
         repo2 = PgRepository(DSN, max_size=2)
         repo2.wait_ready()
         try:
-            a = ClassifierService(repo, ClassifierConfig(url=s.url, poll_s=0.01))
-            b = ClassifierService(repo2, ClassifierConfig(url=s.url, poll_s=0.01))
+            a = ClassifierService(repo, ClassifierConfig(url=s.url, poll_s=0.01, rules_enabled=False))
+            b = ClassifierService(repo2, ClassifierConfig(url=s.url, poll_s=0.01, rules_enabled=False))
             ts = [threading.Thread(target=lambda sv=sv: [sv.run_once() for _ in range(6)]) for sv in (a, b)]
             [t.start() for t in ts]
             [t.join() for t in ts]

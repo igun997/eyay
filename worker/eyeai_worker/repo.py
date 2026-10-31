@@ -4,7 +4,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, ContextManager, Iterator, Protocol
 
 import psycopg
@@ -246,10 +246,10 @@ class PgRepository:
             )
 
     # ---- classifier (see classifier.py). cls_at is the claim time while 'classifying', then the finish time. ----
-    def claim_queued_event(self, exclude=()):
-        with self._pool.connection() as c:  # one transaction: lock, flip to 'classifying', read the snapshot
+    def claim_queued_event(self, exclude=(), frames=1):
+        with self._pool.connection() as c:  # one transaction: lock, flip to 'classifying', read snapshots + queue depth
             row = c.execute(
-                "SELECT e.id::text AS id, e.bbox FROM events e "
+                "SELECT e.id::text AS id, e.bbox, e.label FROM events e "
                 "WHERE e.pipeline='queued' AND NOT (e.id::text = ANY(%s)) "
                 "ORDER BY e.detected_at FOR UPDATE OF e SKIP LOCKED LIMIT 1",
                 (list(exclude),),
@@ -257,18 +257,29 @@ class PgRepository:
             if row is None:
                 return None
             c.execute("UPDATE events SET pipeline='classifying', cls_at=now() WHERE id=%s::uuid", (row["id"],))
-            snap = c.execute(
-                "SELECT jpeg FROM event_snapshots WHERE event_id=%s::uuid ORDER BY idx LIMIT 1", (row["id"],)
-            ).fetchone()
-        return ClassifyJob(event_id=row["id"], bbox=row["bbox"], jpeg=bytes(snap["jpeg"]) if snap else None)
+            snaps = c.execute(
+                "SELECT jpeg, bbox FROM event_snapshots WHERE event_id=%s::uuid ORDER BY idx LIMIT %s",
+                (row["id"], max(1, frames)),
+            ).fetchall()
+            depth = c.execute("SELECT count(*)::int AS n FROM events WHERE pipeline='queued'").fetchone()["n"]
+        # idx 0 predates per-snapshot boxes on old rows: fall back to the event's own box
+        shots = tuple((bytes(r["jpeg"]), r["bbox"] or (row["bbox"] if i == 0 else None)) for i, r in enumerate(snaps))
+        return ClassifyJob(
+            event_id=row["id"], bbox=row["bbox"], jpeg=shots[0][0] if shots else None,
+            label=row["label"], snapshots=shots, queue_depth=depth,
+        )
 
-    def store_classification(self, event_id, result: Classification):
+    def store_classification(self, event_id, result: Classification, flags=(), error=None):
+        """Store the class answer and merge behaviour flags in ONE transaction (row-locked, see behavior.apply_flags)."""
         with self._pool.connection() as c:
             c.execute(
                 "UPDATE events SET pipeline='ready', cls_label=%s, cls_confidence=%s, cls_probs=%s, cls_model=%s, "
-                "cls_ms=%s, cls_error=NULL, cls_at=now() WHERE id=%s::uuid",
-                (result.label, result.confidence, Jsonb(result.probs), result.model, result.ms, event_id),
+                "cls_ms=%s, cls_error=%s, cls_at=now() WHERE id=%s::uuid",
+                (result.label, result.confidence, Jsonb(result.probs), result.model, result.ms,
+                 error[:300] if error else None, event_id),
             )
+            if flags:
+                apply_flags(_PgTx(c), event_id, flags, datetime.now(timezone.utc))
 
     def store_classification_failure(self, event_id, error, *, requeue):
         with self._pool.connection() as c:

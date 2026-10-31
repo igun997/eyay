@@ -6,13 +6,15 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 import cv2
 import numpy as np
 
 from eyeai.detect.tracker import IouTracker
 
+from .behavior import Rule
+from .burst import BurstManager
 from .decision import EventDecider
 from .models import Category, SourceInfo
 from .render import LiveDet, snapshot_jpeg
@@ -84,6 +86,7 @@ class SourceRunner:
         categories: Callable[[], Mapping[str, Category]],
         detector_factory: DetectorFactory,
         *,
+        rules: Callable[[], Sequence[Rule]] = lambda: (),
         target_fps: float = 5.0,
         stall_s: float = 10.0,
         capture_factory: Callable[[SourceInfo], cv2.VideoCapture] = open_capture,
@@ -93,6 +96,7 @@ class SourceRunner:
         self.source = source
         self._repo = repo
         self._decider = EventDecider(repo, source, categories)
+        self._bursts = BurstManager(repo, source, categories, rules)
         self._make_detector = detector_factory
         self._target_fps = target_fps
         self._stall_s = stall_s
@@ -126,6 +130,7 @@ class SourceRunner:
         """Apply changes that do not need a reconnect (name, enabled flag)."""
         self.source = source
         self._decider.set_source(source)
+        self._bursts.set_source(source)
 
     # -- live view -----------------------------------------------------------------------------
     def live(self) -> tuple[int, np.ndarray | None, list[LiveDet]]:
@@ -187,6 +192,7 @@ class SourceRunner:
             try:
                 lost = self._serve(reader, detector)
             finally:
+                self._bursts.flush(datetime.now(timezone.utc))   # stream lost / stopping: finish bursts with what we have
                 reader.stop()
                 reader.join(2)
                 self._reader = None
@@ -230,9 +236,12 @@ class SourceRunner:
             with self._lock:
                 self._dets = [(t.detection.label, t.detection.score, t.detection.bbox) for t in tracked]
                 self._dets_at = time.monotonic()
-            recs = self._decider.process(
-                tracked, lambda f=frame: snapshot_jpeg(f), datetime.now(timezone.utc)
-            )
+            now_utc = datetime.now(timezone.utc)
+            snap_fn = lambda f=frame: snapshot_jpeg(f)  # noqa: E731
+            self._bursts.step(tracked, snap_fn, now_utc)          # next due snapshots of running bursts
+            recs = self._decider.process(tracked, snap_fn, now_utc)
+            for rec in recs:
+                self._bursts.start(rec, tracked, now_utc)
             self.events_written += len(recs)
             window_n += 1
             window_ms += infer_ms
