@@ -68,6 +68,14 @@ def test_crop_rejects_non_image():
 
 
 # ---- request shape + parsing ----------------------------------------------------------------------------------
+def test_request_sends_an_explicit_user_agent():
+    # Cloudflare in front of hosted endpoints (e.g. the Runpod proxy) answers 403/1010 to urllib's default User-Agent.
+    with StubServer() as s:
+        DecisionClient(ClassifierConfig(url=s.url, model="d1")).classify(b"\xff\xd8fakejpeg")
+    ua = s.requests[0]["headers"]["User-Agent"]
+    assert ua == "eyeai-worker/1.0"
+
+
 def test_request_body_matches_the_spec_exactly():
     with StubServer() as s:
         client = DecisionClient(ClassifierConfig(url=s.url, model="d1"))
