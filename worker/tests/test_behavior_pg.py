@@ -91,9 +91,9 @@ def test_trigger_opens_an_incident_for_an_event_without_one(db, repo):
     assert e["pipeline"] == "ready" and e["status"] == "ready_for_triage"          # never changes triage status
     assert e["suspicious"] is True and e["severity"] == "CRITICAL" and e["incident_id"] is not None
     flags = {f["rule"]: f for f in e["cls_flags"]}
-    assert set(flags) == {"weapon", "tampering", "concealment", "trespass", "face_covered"}   # enabled classifier rules for a person
+    assert set(flags) == {"weapon", "tampering", "concealment", "trespass"}   # classifier rules enabled by default for a person (face_covered ships off)
     assert flags["weapon"]["prob"] == pytest.approx(0.91) and flags["weapon"]["triggered"] and not flags["tampering"]["triggered"]
-    assert sum(1 for r in s.requests if "class" not in r["body"]["questions"]) == 5           # one request per rule
+    assert sum(1 for r in s.requests if "class" not in r["body"]["questions"]) == 4           # one request per rule
     inc = c.execute("SELECT title, severity, label, status, source_id::text AS sid FROM incidents WHERE id=%s", (e["incident_id"],)).fetchone()
     assert inc == {"title": "Suspicious: Weapon-like object at Dock 2", "severity": "CRITICAL", "label": "person", "status": "open", "sid": sid}
     t = c.execute("SELECT kind, title, detail, event_id::text AS eid FROM incident_timeline WHERE incident_id=%s", (e["incident_id"],)).fetchall()
@@ -104,7 +104,12 @@ def test_trigger_opens_an_incident_for_an_event_without_one(db, repo):
 def test_trigger_escalates_an_existing_incident_and_never_lowers_it(db, repo):
     c, sid, add = db
     eid, inc = add(incident_severity="MEDIUM", severity="MEDIUM")
-    run_classifier(repo, noul={"face_covered": 0.9})                                          # MEDIUM rule: no escalation
+    # face_covered (MEDIUM) ships disabled; switch it on for this test only
+    c.execute("UPDATE behavior_rules SET enabled=true WHERE key='face_covered'")
+    try:
+        run_classifier(repo, noul={"face_covered": 0.95})                                     # MEDIUM rule: no escalation
+    finally:
+        c.execute("UPDATE behavior_rules SET enabled=false WHERE key='face_covered'")
     assert c.execute("SELECT severity FROM incidents WHERE id=%s", (inc,)).fetchone()["severity"] == "MEDIUM"
     assert ev(c, eid)["suspicious"] is True
     eid2, inc2 = add(incident_severity="HIGH", severity="HIGH")
@@ -122,7 +127,7 @@ def test_no_trigger_stores_flags_only(db, repo):
     eid, inc = add(incident_severity="HIGH", severity="HIGH")
     run_classifier(repo)                                                                       # everything P=0.05
     e = ev(c, eid)
-    assert e["suspicious"] is False and e["severity"] == "HIGH" and len(e["cls_flags"]) == 5
+    assert e["suspicious"] is False and e["severity"] == "HIGH" and len(e["cls_flags"]) == 4
     assert c.execute("SELECT count(*) AS n FROM incident_timeline WHERE incident_id=%s", (inc,)).fetchone()["n"] == 0
 
 
@@ -175,7 +180,7 @@ def test_other_ordering_burst_first_then_classifier_keeps_both(db, repo):
     run_classifier(repo, noul={"concealment": 0.9})
     e = ev(c, rec.event_id)
     flags = {f["rule"]: f for f in e["cls_flags"]}
-    assert flags["lingering"]["triggered"] and flags["concealment"]["triggered"] and len(flags) == 6
+    assert flags["lingering"]["triggered"] and flags["concealment"]["triggered"] and len(flags) == 5
     assert e["pipeline"] == "ready" and e["suspicious"]
     assert c.execute("SELECT severity FROM incidents WHERE id=%s", (rec.incident_id,)).fetchone()["severity"] == "HIGH"
     n = c.execute("SELECT count(*) AS n FROM incident_timeline WHERE incident_id=%s AND title LIKE 'Behaviour indicator:%%'", (rec.incident_id,)).fetchone()["n"]
@@ -184,4 +189,5 @@ def test_other_ordering_burst_first_then_classifier_keeps_both(db, repo):
 
 def test_list_behavior_rules_returns_only_enabled_rules_in_order(db, repo):
     keys = [r.key for r in repo.list_behavior_rules()]
-    assert keys[:6] == ["weapon", "tampering", "concealment", "trespass", "face_covered", "lingering"] and "plate_obscured" not in keys
+    assert keys[:5] == ["weapon", "tampering", "concealment", "trespass", "lingering"]
+    assert "face_covered" not in keys and "plate_obscured" not in keys                        # both ship disabled
