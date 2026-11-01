@@ -28,6 +28,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# an exception inside a worker thread must fail the test, not just warn (it hid a real bug in CI logs)
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
 pythonpath = ["src"]
 
 [build-system]

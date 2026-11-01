@@ -29,6 +29,10 @@ disagreements, and a person still decides; the classifier never dismisses anythi
 Apache-2.0 alternatives on that list: Intern-Decision, dohnuts, Clef), 39/39 on a small crop set at ~3 s/image on 4 CPU cores. Clef-flash (9B) crashed in Ollama's CPU backend on the
 test machine. Use any `/v1/systemone` endpoint by setting `CLASSIFIER_URL` / `CLASSIFIER_MODEL`; leave `CLASSIFIER_URL` empty to run without it.
 
+**Images.** CI builds `eyeai-app` and `eyeai-worker` on every push and PR. After a merge to `main` (and only when every check
+and the e2e pass) it publishes them to GitHub Container Registry: `ghcr.io/<owner>/<repo>-app` and `-worker`, tagged `latest` and the
+commit SHA. Pull one with `docker pull ghcr.io/<owner>/<repo>-app:latest` (the package is private until you change its visibility).
+
 Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,
 everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: inference
 measured 0.12 s per frame on one idle stream and 0.7-1.7 s per frame with 3 streams sharing 2 cores, so cap it with `EYEAI_TARGET_FPS` and run one worker per ~2 streams per 2 cores.

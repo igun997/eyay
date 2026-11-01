@@ -49,11 +49,11 @@ class LatestFrameReader(threading.Thread):
         self._seq = 0
         self._ts = 0.0
         self.ended = threading.Event()
-        self._stop = threading.Event()
+        self._stop_evt = threading.Event()
 
     def run(self) -> None:
         try:
-            while not self._stop.is_set():
+            while not self._stop_evt.is_set():
                 ok, frame = self._cap.read()
                 if not ok or frame is None:
                     break
@@ -72,7 +72,7 @@ class LatestFrameReader(threading.Thread):
             return self._seq, self._frame, self._ts
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
 
 
 DetectorFactory = Callable[[SourceInfo], "object"]  # returns an object with .detect(frame) -> list[Detection]
