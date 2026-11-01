@@ -28,7 +28,7 @@ class StubServer:
             def do_POST(self):  # noqa: N802
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n))
-                outer.requests.append({"path": self.path, "body": body})
+                outer.requests.append({"path": self.path, "body": body, "headers": dict(self.headers)})
                 qs = body.get("questions", {})
                 status, payload = outer.status, outer.body
                 if outer.delay_s:

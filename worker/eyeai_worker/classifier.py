@@ -25,6 +25,7 @@ from .behavior import Flag, Rule, RuleCache
 
 log = logging.getLogger("eyeai.classifier")
 
+USER_AGENT = "eyeai-worker/1.0"
 LABELS = ("person", "vehicle", "false_alarm")
 STATE = "Snapshot from a security camera, cropped around a possible detection."
 QUESTION = {
@@ -192,7 +193,9 @@ class DecisionClient:
         req = urllib.request.Request(
             f"{self.cfg.url}/v1/systemone",
             data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
+            # urllib's default "Python-urllib/x" User-Agent is rejected (403, error 1010) by Cloudflare in front of hosted
+            # endpoints such as the Runpod proxy; send an explicit one.
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
             method="POST",
         )
         t0 = time.monotonic()
