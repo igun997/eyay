@@ -1,0 +1,86 @@
+# Local stack:    docker compose up --build                  (app + worker + db)
+# With demo feed: docker compose --profile dev up --build    (adds mediamtx + sample-video feeder)
+services:
+  db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: eyeai, POSTGRES_PASSWORD: eyeai, POSTGRES_DB: eyeai }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["${DB_PORT:-5432}:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U eyeai"], interval: 3s, timeout: 3s, retries: 20 }
+
+  migrate:             # one-shot: applies db/migrations (idempotent, checksummed, advisory-locked) and seeds the first admin
+    build: { context: ., dockerfile: docker/web.Dockerfile }
+    image: eyeai-app:latest
+    command: ["node", "migrate.cjs"]
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@eyeai.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+    restart: "no"
+
+  app:
+    build: { context: ., dockerfile: docker/web.Dockerfile }
+    image: eyeai-app:latest
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    environment:
+      SKIP_MIGRATE: "1"
+      DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
+      AUTH_SECRET: ${AUTH_SECRET:-dev-only-secret-change-me-please-32b}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@eyeai.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      WORKER_URL: http://worker:8090
+    ports: ["${APP_PORT:-3000}:3000"]
+
+  worker:
+    build: { context: ., dockerfile: docker/worker.Dockerfile }
+    image: eyeai-worker:latest
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      classifier-init: { condition: service_completed_successfully, required: false }  # only with the classifier profile
+    environment:
+      DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
+      WORKER_ID: worker-1
+      CLASSIFIER_URL: ${CLASSIFIER_URL:-}           # empty = no classification (events go straight to triage)
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-d1}
+      EYEAI_TARGET_FPS: ${EYEAI_TARGET_FPS:-5}      # analysed frames/s per stream
+      EYEAI_ORT_THREADS: ${EYEAI_ORT_THREADS:-}     # ONNX threads per stream (default: auto)
+    expose: ["8090"]
+
+  # System One classifier (Liquid AI d1-3B, text+image) served by Ollama on /v1/systemone.
+  #   CLASSIFIER_URL=http://classifier:11434 docker compose --profile classifier up --build
+  # or point CLASSIFIER_URL at any Ollama / TypeSafe-compatible /v1/systemone endpoint (e.g. a GPU box) and skip this profile.
+  classifier:
+    profiles: [classifier]
+    image: ollama/ollama:latest
+    volumes: [ollama:/root/.ollama]
+    healthcheck: { test: ["CMD", "ollama", "list"], interval: 5s, timeout: 5s, retries: 30 }
+
+  classifier-init:   # one-shot: downloads the model (3.7 GB) into the volume, then exits
+    profiles: [classifier]
+    image: ollama/ollama:latest
+    entrypoint: ["ollama", "pull", "${CLASSIFIER_MODEL:-d1}"]
+    environment: { OLLAMA_HOST: "classifier:11434" }
+    depends_on: { classifier: { condition: service_healthy } }
+    restart: "no"
+
+  mediamtx:
+    profiles: [dev]
+    image: bluenviron/mediamtx:latest
+    ports: ["8554:8554", "8888:8888"]   # RTSP, HLS
+
+  feeder:
+    profiles: [dev]
+    image: jrottenberg/ffmpeg:6.1-alpine
+    entrypoint: ["/bin/sh", "/feeder.sh"]
+    depends_on: [mediamtx]
+    environment:
+      STREAMS: ${FEED_STREAMS:-dock2}   # one stream by default; e.g. FEED_STREAMS="dock2 gate aisle"
+    volumes: ["./data/samples:/samples:ro", "./docker/feeder.sh:/feeder.sh:ro"]
+    # register in the UI:  rtsp://mediamtx:8554/dock2 | /gate | /aisle
+    #                      http://mediamtx:8888/dock2/index.m3u8   (same feed as HLS)
+
+volumes:
+  pgdata:
+  ollama:

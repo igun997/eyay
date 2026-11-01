@@ -132,11 +132,16 @@ class YoloxDetector:
         nms_thresh: float = 0.45,
         classes: Iterable[str] | None = None,
         providers: list[str] | None = None,
+        intra_op_threads: int | None = None,
     ):
         path = Path(model_path)
         if not path.is_file():
             raise FileNotFoundError(f"YOLOX model not found: {path}")
-        self._session = ort.InferenceSession(str(path), providers=providers or ["CPUExecutionProvider"])
+        opts = None
+        if intra_op_threads:  # several detectors in one process: cap threads per session instead of oversubscribing
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = intra_op_threads
+        self._session = ort.InferenceSession(str(path), sess_options=opts, providers=providers or ["CPUExecutionProvider"])
         inp = self._session.get_inputs()[0]
         _, _, h, w = inp.shape
         if not (isinstance(h, int) and isinstance(w, int)) or h != w or h % max(_STRIDES) != 0:

@@ -1,3 +1,41 @@
+# eyeai: live RTSP / M3U8 analysis platform
+
+Admins register an RTSP or M3U8 URL; a worker listens, runs YOLOX on the live frames and writes every detection that
+falls in a configured category straight into Postgres. Security reviews them in triage and handles incidents. The live
+view shows the stream with bounding boxes drawn on it. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+UI reference: [docs/design-system](docs/design-system/README.md).
+
+| Image | Source | Role |
+|---|---|---|
+| `eyeai-app` | `docker/web.Dockerfile` (`web/`, Next.js 15 + shadcn/ui) | UI + API, applies DB migrations on boot, seeds the first admin |
+| `eyeai-worker` | `docker/worker.Dockerfile` (`worker/`, reuses `src/eyeai/detect`) | stream listener, detector, events/incidents writer, MJPEG with boxes |
+| `postgres:16-alpine` | upstream | data |
+| `ollama/ollama` (profile `classifier`) | upstream, model **Liquid AI d1-3B** | server-side classification of every snapshot (System One decision model, text+image) |
+| `mediamtx` + `jrottenberg/ffmpeg` | upstream, compose profile `dev` only | local RTSP/HLS server fed with `data/samples/*.mp4` for live testing without a camera |
+
+```bash
+scripts/fetch_assets.sh                              # sample videos (dev feed only)
+docker compose --profile dev up --build              # http://localhost:3000  admin@eyeai.local / admin12345
+# Sources & health -> Add source:  rtsp://mediamtx:8554/dock2  |  /gate  |  /aisle
+#                                  http://mediamtx:8888/aisle/index.m3u8   (HLS)
+CLASSIFIER_URL=http://classifier:11434 docker compose --profile dev --profile classifier up --build   # + d1 classifier (downloads 3.7 GB once)
+docker compose up --build                            # production-like: no demo feed, register your own cameras
+```
+
+**Classification.** Each detection is queued and sent (cropped around its box) to a System One decision model that answers
+one typed question: `person` / `vehicle` / `false_alarm`. Triage shows both results (`EDGE` and `CLASSIFIER`), flags
+disagreements, and a person still decides; the classifier never dismisses anything. Model chosen from
+[awesome-system-one](https://github.com/andyrewlee/awesome-system-one): **d1-3B** (text+image, native in Ollama `/v1/systemone`; license is **LFM Open License v1.0**, not Apache: review its commercial-use terms before shipping.
+Apache-2.0 alternatives on that list: Intern-Decision, dohnuts, Clef), 39/39 on a small crop set at ~3 s/image on 4 CPU cores. Clef-flash (9B) crashed in Ollama's CPU backend on the
+test machine. Use any `/v1/systemone` endpoint by setting `CLASSIFIER_URL` / `CLASSIFIER_MODEL`; leave `CLASSIFIER_URL` empty to run without it.
+
+Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,
+everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: inference
+measured 0.12 s per frame on one idle stream and 0.7-1.7 s per frame with 3 streams sharing 2 cores, so cap it with `EYEAI_TARGET_FPS` and run one worker per ~2 streams per 2 cores.
+One worker per database (no source locking yet). Web tests: `cd web && pnpm test`; worker tests: `PYTHONPATH=src:worker pytest worker/tests`.
+
+---
+
 # eyeai: event-first CCTV + IoT engine (POC)
 
 Engine only; the dashboard and the LLM/VLM reporting agent are deliberately not built yet. It implements the
