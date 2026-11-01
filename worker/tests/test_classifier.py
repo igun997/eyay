@@ -73,7 +73,7 @@ def test_request_sends_an_explicit_user_agent():
     with StubServer() as s:
         DecisionClient(ClassifierConfig(url=s.url, model="d1")).classify(b"\xff\xd8fakejpeg")
     ua = s.requests[0]["headers"]["User-Agent"]
-    assert ua.startswith("eyeai-worker/") and "urllib" not in ua.lower()
+    assert ua == "eyeai-worker/1.0"
 
 
 def test_request_body_matches_the_spec_exactly():
