@@ -39,18 +39,19 @@ worker writes an **indication** from the track: `moving` (centre moved more than
 (stayed put for the whole burst), `crowd` (3+ objects of the label in frame) or `appeared` (seen once, burst too short),
 a one-line `indication` sentence and `burst_ms`. The same sentence is added to the incident timeline.
 
-## Classification (server side)
-After the edge detector writes an event it is `pipeline = queued`. A classifier loop in the worker (`SELECT ... FOR UPDATE
-SKIP LOCKED`) crops the snapshot around `bbox` (+15% margin) and asks a System One decision model for one `choice`
-question with options `person` / `vehicle` / `false_alarm` via `POST {CLASSIFIER_URL}/v1/systemone` (Ollama, model `d1`
-= Liquid AI d1-3B, text+image, ~3 s/image on 4 CPU cores). The answer is stored on the event (`cls_*`) and shown in
-triage as `label | confidence | CLASSIFIER` next to the edge result. It never dismisses anything: a person still
-confirms or dismisses. No classifier configured -> `skipped`; classifier down -> `failed` (retry later); either way the
-event reaches triage.
+## Classification
+The detector (the camera AI) classifies every event when it is written: `events.cls_label` is `person`, `vehicle` or `other`,
+`cls_confidence` is the detector's certainty and `cls_model` is `detector`, so triage shows `label | certainty | EDGE` immediately and
+there is no waiting for a second model. A person still confirms or dismisses; nothing is ever dismissed automatically.
+
+An **optional second AI check** (`CLASSIFIER_URL`: a System One decision model served by Ollama, e.g. Liquid AI `d1`) only answers the
+yes/no behaviour questions of rules of kind `classifier`. When it is not configured, those rules stay silent and events are `ready`
+at once; when it is, events that have such questions are `queued`, checked in the background and then `ready` (or `failed`, with the
+detector's classification untouched).
 
 ## Behaviour rules (suspicious behaviour / fraud indicators)
 `behavior_rules` ships a default pack (weapon-like object, tampering, concealing an item, climbing a barrier, face covered,
-lingering; face-covered and licence-plate-obscured are off by default because they proved noisy or angle-dependent). Classifier rules add one `noul` (yes/no) question each to the same
+lingering; face-covered and licence-plate-obscured are off by default because they proved noisy or angle-dependent). Rules come in three kinds: `classifier` (yes/no question to the optional second AI check), `indication` (from the follow-up photos) and `object` (the detector sees a knife, scissors or bat next to a person; works with the cameras alone). Classifier rules add one `noul` (yes/no) question each to the same
 `/v1/systemone` request as the class question, so one forward pass over the snapshot answers all of them. A rule triggers at
 P(yes) >= its threshold. Every evaluated rule is stored in `events.cls_flags`; a trigger sets `events.suspicious`, raises the
 event and incident severity to the rule's severity, adds a `system` timeline entry and, if the rule says so, opens an incident
@@ -58,5 +59,13 @@ even for categories that normally do not. These are indicators for a person to r
 and nothing is blocked or accused automatically. Probabilities come from a 3B model looking at stills: expect false
 positives and misses; thresholds are per rule and meant to be tuned on the site's own footage.
 
+## Alerts and automations
+Admins build "when event A happens, simulate or send message B" in the dashboard (**Alerts**). The worker evaluates each event the moment it is
+created or changes and, for automations in *live* mode, sends to a webhook, an MQTT broker or a PLC (Modbus TCP coil pulse or register
+write); in *practice* (simulate) mode it only logs what would be sent. Quiet period, hourly cap, per-action timeouts and a full run log keep
+it safe; coil writes always switch back off. It is for alerts and indications, never for safety functions. See
+[AUTOMATIONS.md](AUTOMATIONS.md).
+
 ## Out of scope (by decision)
-Sensors (MQTT/Modbus), VLM, server classifier, shift reports, NVR playback/export, SSO. No actuators.
+Sensor ingestion (MQTT/Modbus *input*), a general VLM, shift reports, NVR playback/export, SSO. Outputs exist only through automations,
+simulation first.

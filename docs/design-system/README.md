@@ -37,7 +37,7 @@ Brand mark: [`brand/logo-mark.png`](brand/logo-mark.png).
 - Severity is never shown by colour alone: every pill has a text label.
 - Classification always shows label, confidence and source (`EDGE`, `CLASSIFIER`, `VLM`).
 - AI-written text carries the `AI-GENERATED` tag and is read-only.
-- No component triggers a physical action (doors, gates, machines).
+- Nothing physical happens on its own: an output (message, lamp, PLC coil) only fires through an automation an admin has switched to Live, starts in Practice mode, and is always logged. Never a safety function.
 
 ## Component boards
 

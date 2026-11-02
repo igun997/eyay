@@ -5,7 +5,9 @@ detect the use of a knife (or other suspicious behaviour). Read the verdict firs
 
 ## Verdict
 
-**Knife / sharp weapon.** The platform has a rule for it (`weapon`: *"Is the person holding a weapon or a weapon-like object such as a
+**Knife / sharp weapon.** The platform has two rules for it. `weapon_object` (works with the cameras alone, on by default): the detector's own
+knife / scissors / baseball-bat classes seen next to a person during the follow-up photos, at certainty >= 0.35; these are COCO classes, so small or
+hidden blades are often missed and kitchen or office scenes can trigger it. `weapon` (needs the optional second AI check):  *"Is the person holding a weapon or a weapon-like object such as a
 gun, knife or crowbar?"*, threshold 0.70, severity CRITICAL, opens an incident). It is a question put to a 3B vision-language model
 about a still crop of the person. **Nobody has measured how often it catches a real knife.** The only evidence in the repository is
 negative: on ordinary footage it stayed below P = 0.15 (migration 004), meaning few false alarms, which says nothing about misses.

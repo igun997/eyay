@@ -10,7 +10,7 @@ UI reference: [docs/design-system](docs/design-system/README.md).
 | `eyeai-app` | `docker/web.Dockerfile` (`web/`, Next.js 15 + shadcn/ui) | UI + API, applies DB migrations on boot, seeds the first admin |
 | `eyeai-worker` | `docker/engine.Dockerfile` (`engine/`, Rust: ffmpeg + ONNX Runtime) | stream listener, YOLOX detector, tracker, speed, events/incidents writer, classifier, MJPEG with boxes |
 | `postgres:16-alpine` | upstream | data |
-| `ollama/ollama` (profile `classifier`) | upstream, model **Liquid AI d1-3B** | server-side classification of every snapshot (System One decision model, text+image) |
+| `ollama/ollama` (profile `classifier`) | upstream, model **Liquid AI d1-3B** | optional second AI check: answers the yes/no behaviour questions of the `classifier` rules (System One decision model, text+image); the detector itself classifies every event |
 | `mediamtx` + `jrottenberg/ffmpeg` | upstream, compose profile `dev` only | local RTSP/HLS server fed with `data/samples/*.mp4` for live testing without a camera |
 
 ```bash
@@ -22,12 +22,18 @@ CLASSIFIER_URL=http://classifier:11434 docker compose --profile dev --profile cl
 docker compose up --build                            # production-like: no demo feed, register your own cameras
 ```
 
-**Classification.** Each detection is queued and sent (cropped around its box) to a System One decision model that answers
-one typed question: `person` / `vehicle` / `false_alarm`. Triage shows both results (`EDGE` and `CLASSIFIER`), flags
-disagreements, and a person still decides; the classifier never dismisses anything. Model chosen from
+**Classification.** The camera AI (the detector) classifies every event itself (`person`, `vehicle` or `other`, with its certainty), so
+triage never waits for another model. An **optional second AI check** answers the yes/no behaviour questions of the question-type rules
+(weapon in hand, tampering, concealing, climbing): each such event is cropped around the person and sent to a System One decision model.
+Rules of the kinds *spotted next to a person* (a knife, scissors or bat seen by the detector) and *activity pattern* (lingering) need no second
+model. A person still decides; nothing is dismissed automatically. Model for the optional check, chosen from
 [awesome-system-one](https://github.com/andyrewlee/awesome-system-one): **d1-3B** (text+image, native in Ollama `/v1/systemone`; license is **LFM Open License v1.0**, not Apache: review its commercial-use terms before shipping.
-Apache-2.0 alternatives on that list: Intern-Decision, dohnuts, Clef), 39/39 on a small crop set at ~3 s/image on 4 CPU cores. Clef-flash (9B) crashed in Ollama's CPU backend on the
-test machine. Use any `/v1/systemone` endpoint by setting `CLASSIFIER_URL` / `CLASSIFIER_MODEL`; leave `CLASSIFIER_URL` empty to run without it.
+Apache-2.0 alternatives on that list: Intern-Decision, dohnuts, Clef). Use any `/v1/systemone` endpoint by setting `CLASSIFIER_URL` / `CLASSIFIER_MODEL`;
+leave `CLASSIFIER_URL` empty to run without it (the default). How well any of this catches a knife or other behaviour is **not validated**:
+see [docs/DETECTION_CAPABILITIES.md](docs/DETECTION_CAPABILITIES.md) and measure with `scripts/eval_rule.py`.
+
+**Alerts.** Admins build "when event A happens, simulate or send message B" (webhook, MQTT, PLC over Modbus TCP) in the dashboard. Everything starts in
+Practice mode and is logged; see [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md) for the safety limits (never wire it to a safety function).
 
 **Images.** CI builds `eyeai-app` and `eyeai-worker` on every push and PR. After a merge to `main` (and only when every check
 and the e2e pass) it publishes them to GitHub Container Registry: `ghcr.io/<owner>/<repo>-app` and `-worker`, tagged `latest` and the
