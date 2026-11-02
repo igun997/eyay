@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Result, bail};
+use tracing::debug;
 
 use crate::config::{Axis, CalibrationCfg, Method};
 use crate::tracker::Tracked;
@@ -27,8 +28,10 @@ pub struct SpeedReading {
 #[derive(Default)]
 struct LineState {
     last: Option<(f64, f64)>, // (time, position)
-    first_crossing: Option<f64>,
-    second_crossing: Option<f64>,
+    /// the line crossed first: (0 = line1 / 1 = line2, time, direction of motion +1 / -1). Crossing the same line again
+    /// (jitter, an object lingering on the line) replaces it, so a standing object does not start the clock early.
+    start: Option<(u8, f64, i8)>,
+    end: Option<f64>,
 }
 
 #[derive(Default)]
@@ -88,21 +91,29 @@ impl SpeedEstimator {
             Axis::X => x,
             Axis::Y => y,
         };
-        let (l1, l2) = (f64::from(self.cfg.line1), f64::from(self.cfg.line2));
+        let lines = [f64::from(self.cfg.line1), f64::from(self.cfg.line2)];
         let st = self.lines.entry(key.clone()).or_default();
         let prev = st.last.replace((t, pos));
-        if let Some((pt, pp)) = prev {
-            // when the crossing happened between two analysed frames: interpolate linearly
-            let crossing = |line: f64| ((pp - line).signum() != (pos - line).signum() && pos != pp).then(|| pt + (line - pp) / (pos - pp) * (t - pt));
-            if st.first_crossing.is_none() {
-                st.first_crossing = crossing(l1);
-            }
-            if st.first_crossing.is_some() && st.second_crossing.is_none() {
-                st.second_crossing = crossing(l2);
+        debug!("speed: {} #{} t={t:.2} pos={pos:.3} (lines {:.2}/{:.2}) prev={prev:?} start={:?} end={:?}", key.0, key.1, lines[0], lines[1], st.start, st.end);
+        if st.end.is_none() {
+            if let Some((pt, pp)) = prev.filter(|(_, pp)| *pp != pos) {
+                let dir: i8 = if pos > pp { 1 } else { -1 };
+                for (i, line) in lines.iter().enumerate() {
+                    if (pp - line).signum() == (pos - line).signum() {
+                        continue; // did not cross this line between the two samples
+                    }
+                    let at = pt + (line - pp) / (pos - pp) * (t - pt); // linear interpolation between the analysed frames
+                    match st.start {
+                        None => st.start = Some((i as u8, at, dir)),
+                        Some((si, _, _)) if si == i as u8 => st.start = Some((i as u8, at, dir)), // crossed the first line again
+                        Some((_, t0, sdir)) if sdir == dir && at > t0 => st.end = Some(at),         // the other line, same direction
+                        Some(_) => st.start = Some((i as u8, at, dir)),                              // came back across: start over
+                    }
+                }
             }
         }
-        let (a, b) = (st.first_crossing?, st.second_crossing?);
-        let elapsed = (b - a).abs();
+        let (t0, t1) = (st.start?.1, st.end?);
+        let elapsed = (t1 - t0).abs();
         (elapsed > 0.0).then(|| f64::from(self.cfg.distance_m) / elapsed * MPS_TO_KMH)
     }
 
@@ -247,5 +258,38 @@ mod tests {
     fn degenerate_points_are_rejected_and_off_means_none() {
         assert!(solve_homography(&[[0.0, 0.0]; 4], &[[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]]).is_err());
         assert!(SpeedEstimator::new(&cfg(json!({"method": "none"}))).is_none());
+    }
+
+    #[test]
+    fn an_object_standing_on_the_first_line_does_not_start_the_clock_early() {
+        let c = cfg(json!({"method": "line", "line_axis": "x", "line1": 0.4, "line2": 0.7, "distance_m": 20}));
+        let mut e = SpeedEstimator::new(&c).unwrap().unwrap();
+        // jitters across line 1 for a while, then walks to line 2: 0.4 at t=10, 0.7 at t=13 -> 20 m / 3 s = 24 km/h
+        let mut last = Vec::new();
+        for (t, x) in [(0.0, 0.39), (1.0, 0.41), (2.0, 0.39), (3.0, 0.41), (9.0, 0.39), (10.5, 0.45), (12.0, 0.55), (13.5, 0.70), (14.0, 0.75)] {
+            last = e.update(&[tr(1, x, 0.8)], t);
+        }
+        // last crossing of line 1 (upwards) lies between t=9 (0.39) and t=10.5 (0.45): at t=9.25 ; line 2 at ~13.5
+        let k = last[0].1.kmh;
+        assert!((k - 20.0 / (13.5 - 9.25) * 3.6).abs() < 1.5, "{k}");
+    }
+
+    #[test]
+    fn motion_from_line_two_to_line_one_is_measured_too_and_a_u_turn_starts_over() {
+        let c = cfg(json!({"method": "line", "line_axis": "x", "line1": 0.4, "line2": 0.7, "distance_m": 30}));
+        let mut e = SpeedEstimator::new(&c).unwrap().unwrap();
+        let mut last = Vec::new();
+        for (t, x) in [(0.0, 0.8), (1.0, 0.6), (2.0, 0.5), (3.0, 0.3)] {
+            last = e.update(&[tr(1, x, 0.8)], t);
+        }
+        // crosses 0.7 at t=0.5 and 0.4 at t=2.5: 30 m / 2 s = 54 km/h
+        assert!((last[0].1.kmh - 54.0).abs() < 0.5, "{}", last[0].1.kmh);
+
+        let mut e2 = SpeedEstimator::new(&c).unwrap().unwrap();
+        let mut got = Vec::new();
+        for (t, x) in [(0.0, 0.3), (1.0, 0.5), (2.0, 0.3), (3.0, 0.5)] {
+            got = e2.update(&[tr(2, x, 0.8)], t);
+        }
+        assert!(got.is_empty(), "going back and forth over line 1 is not a measurement");
     }
 }
