@@ -330,7 +330,9 @@ impl Worker {
             for rec in decider.process(&tracked, &cats, &snap, now_utc) {
                 bursts.start(&rec, &tracked, &cats, now_utc);
             }
-            decider.apply_speeds(&readings, now_utc);
+            for rec in decider.apply_speeds(&readings, &tracked, &cats, &snap, now_utc) {
+                bursts.start(&rec, &tracked, &cats, now_utc);
+            }
             window_n += 1;
             window_ms += infer_ms;
             if window_start.elapsed() >= Duration::from_secs(5) {

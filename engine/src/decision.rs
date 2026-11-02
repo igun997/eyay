@@ -126,16 +126,45 @@ impl EventDecider {
         out
     }
 
-    /// Store the speed of tracks that have an event (and raise the `speeding` indicator above the limit). A speed that arrives
-    /// before the track has an event is applied on the first call after the event exists. Only changes of 1 km/h or more are written.
-    pub fn apply_speeds(&mut self, readings: &[(String, SpeedReading)], now: DateTime<Utc>) {
+    /// Store the speed of tracks that have an event (and raise the `speeding` indicator above the limit). A track that is over the limit
+    /// but has no event yet gets one of its own right away, even while the category's quiet period runs: the fast vehicle is exactly
+    /// what should be reported, and the track that happened to win the last event slot (often something parked) is not it. Only
+    /// changes of 1 km/h or more are written. Returns the events created here so the caller can start their follow-up photos.
+    pub fn apply_speeds(
+        &mut self, readings: &[(String, SpeedReading)], tracked: &[Tracked], cats: &HashMap<String, Category>,
+        snapshot: &dyn Fn() -> Result<Snapshot>, now: DateTime<Utc>,
+    ) -> Vec<EventRecord> {
         let cal = self.source.config.calibration.clone();
+        let mut created = Vec::new();
+        let mut snap: Option<Snapshot> = None;
         for (label, r) in readings {
-            let Some(event_id) = self.events_of.get(&(label.clone(), r.track_id)).cloned() else { continue };
+            let key = (label.clone(), r.track_id);
+            let over = r.kmh > cal.speed_limit_kmh;
+            if over && !self.events_of.contains_key(&key) {
+                let (cat, track) = (cats.get(label), tracked.iter().find(|t| &t.label == label && t.track_id == r.track_id));
+                if let (Some(cat), Some(track)) = (cat, track) {
+                    if cat.enabled && self.source.labels.contains(label) && track.score >= self.source.min_confidence {
+                        if snap.is_none() {
+                            snap = snapshot().ok();
+                        }
+                        if let Some(shot) = snap.as_ref() {
+                            match self.write(cat, track, shot, now) {
+                                Ok(rec) => {
+                                    self.last_event.insert(label.clone(), now);
+                                    self.reported.insert(key.clone(), now);
+                                    self.events_of.insert(key.clone(), rec.event_id.clone());
+                                    created.push(rec);
+                                }
+                                Err(e) => error!("{}: writing the speeding event failed: {e:#}", self.source.code),
+                            }
+                        }
+                    }
+                }
+            }
+            let Some(event_id) = self.events_of.get(&key).cloned() else { continue };
             if self.stored_speed.get(&event_id).is_some_and(|s| (s - r.kmh).abs() < 1.0) {
                 continue;
             }
-            let over = r.kmh > cal.speed_limit_kmh;
             let flag = Flag {
                 rule: "speeding".into(), title: i18n::speeding_title(i18n::lang()), prob: None, threshold: 0.0, severity: cal.speed_severity.clone(),
                 triggered: true, opens_incident: true,
@@ -157,6 +186,7 @@ impl EventDecider {
                 Err(e) => error!("{}: storing speed failed: {e:#}", self.source.code),
             }
         }
+        created
     }
 
     fn write(&self, cat: &Category, t: &Tracked, snap: &Snapshot, now: DateTime<Utc>) -> Result<EventRecord> {
@@ -298,21 +328,28 @@ mod tests {
         let r = d.process(&[tr("car", 7, 0.9)], &cats, &snap, now);
         let ev = r[0].event_id.clone();
         // 40 km/h: stored, no indicator
-        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 7, kmh: 40.0 })], now);
+        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 7, kmh: 40.0 })], &[tr("car", 7, 0.9)], &cats, &snap, now);
         assert_eq!(repo.state().events[&ev].speed_kmh, Some(40.0));
         assert!(!repo.state().events[&ev].suspicious);
         // within 1 km/h of what is stored: nothing written
-        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 7, kmh: 40.5 })], now);
+        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 7, kmh: 40.5 })], &[tr("car", 7, 0.9)], &cats, &snap, now);
         assert_eq!(repo.state().events[&ev].speed_kmh, Some(40.0));
         // 70 km/h: stored and flagged
-        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 7, kmh: 70.0 })], now);
+        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 7, kmh: 70.0 })], &[tr("car", 7, 0.9)], &cats, &snap, now);
         let s = repo.state();
         assert_eq!(s.events[&ev].speed_kmh, Some(70.0));
         assert!(s.events[&ev].suspicious);
         assert!(s.events[&ev].flags.iter().any(|f| f["rule"] == "speeding"));
-        // a track without an event is ignored
-        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 99, kmh: 90.0 })], now);
+        // a slow track without an event is ignored (it is not worth an event of its own)
+        d.apply_speeds(&[("car".into(), SpeedReading { track_id: 98, kmh: 30.0 })], &[tr("car", 98, 0.9)], &cats, &snap, now);
         assert_eq!(repo.state().events.len(), 1);
+        // a fast track without an event gets its own, right away, even inside the car quiet period
+        let made = d.apply_speeds(&[("car".into(), SpeedReading { track_id: 99, kmh: 90.0 })], &[tr("car", 99, 0.9)], &cats, &snap, now);
+        assert_eq!(made.len(), 1);
+        let s = repo.state();
+        assert_eq!(s.events.len(), 2);
+        let fast = s.events.values().find(|e| e.speed_kmh == Some(90.0)).expect("event with the speed");
+        assert!(fast.suspicious && fast.flags.iter().any(|f| f["rule"] == "speeding"));
     }
 
     #[test]
