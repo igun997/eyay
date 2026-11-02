@@ -48,6 +48,10 @@ impl IouTracker {
         Self { iou_threshold, max_missed, tracks: Vec::new(), next_id: 1 }
     }
 
+    pub fn set_params(&mut self, iou_threshold: f32, max_missed: u32) {
+        (self.iou_threshold, self.max_missed) = (iou_threshold, max_missed);
+    }
+
     /// One `Tracked` per input detection, in input order.
     pub fn update(&mut self, dets: &[Detection]) -> Vec<Tracked> {
         let mut assigned: Vec<i32> = vec![-1; dets.len()];

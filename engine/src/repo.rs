@@ -33,6 +33,7 @@ pub trait Tx {
     fn insert_event(&mut self, e: &NewEvent) -> Result<String>;
     fn insert_snapshot(&mut self, event_id: &str, snap: &Snapshot, bbox: Option<&BBox>, offset_ms: i32, idx: i16) -> Result<()>;
     fn finalize_burst(&mut self, event_id: &str, burst_ms: i32, kind: &str, indication: &str) -> Result<()>;
+    fn set_event_speed(&mut self, event_id: &str, kmh: f32) -> Result<()>;
     // behaviour rules (see behavior::apply_flags)
     fn lock_event(&mut self, event_id: &str) -> Result<Option<EventState>>;
     fn set_event_flags(&mut self, event_id: &str, flags: &[Value], suspicious: bool, severity: &str) -> Result<()>;
@@ -47,6 +48,8 @@ pub trait Repository: Send + Sync {
     fn list_sources(&self) -> Result<Vec<SourceInfo>>;
     fn list_categories(&self) -> Result<HashMap<String, Category>>;
     fn list_behavior_rules(&self) -> Result<Vec<Rule>>;
+    /// `engine_settings` row 'defaults' (docs/ENGINE_CONFIG.md)
+    fn engine_defaults(&self) -> Result<Value>;
     fn update_source_state(
         &self, source_id: &str, status: &str, last_error: Option<&str>, last_seen: Option<DateTime<Utc>>,
         fps: Option<f32>, inference_ms: Option<f32>,
@@ -90,11 +93,13 @@ impl PgRepository {
 
     fn schema_ready(&self) -> Result<bool> {
         let mut c = Client::connect(&self.dsn, NoTls).context("connecting")?;
-        // schema = migrations 001-004 (sources, events.pipeline/burst_done/cls_flags, behavior_rules), applied by the web app
+        // schema = migrations 001-005 (sources.config, engine_settings, events.pipeline/burst_done/cls_flags/speed_kmh, behavior_rules), applied by the web app
         let row = c.query_one(
             "SELECT to_regclass('public.sources') IS NOT NULL AND to_regclass('public.behavior_rules') IS NOT NULL AND \
+             to_regclass('public.engine_settings') IS NOT NULL AND \
              (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='events' \
-              AND column_name IN ('pipeline','burst_done','cls_flags')) = 3",
+              AND column_name IN ('pipeline','burst_done','cls_flags','speed_kmh')) = 4 AND \
+             EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sources' AND column_name='config')",
             &[],
         )?;
         Ok(row.get(0))
@@ -165,6 +170,11 @@ impl Tx for PgTx<'_, '_> {
         Ok(())
     }
 
+    fn set_event_speed(&mut self, event_id: &str, kmh: f32) -> Result<()> {
+        self.0.execute("UPDATE events SET speed_kmh=$1 WHERE id=$2::text::uuid", &[&kmh, &event_id])?;
+        Ok(())
+    }
+
     fn lock_event(&mut self, event_id: &str) -> Result<Option<EventState>> {
         let row = self.0.query_opt(
             "SELECT e.id::text, e.incident_id::text, i.severity, e.label, e.severity, e.source_id::text, s.name, e.cls_flags, e.suspicious \
@@ -221,12 +231,12 @@ impl Repository for PgRepository {
 
     fn list_sources(&self) -> Result<Vec<SourceInfo>> {
         self.with(|c| {
-            let rows = c.query("SELECT id::text, code, name, url, kind, labels, min_confidence, enabled FROM sources ORDER BY code", &[])?;
+            let rows = c.query("SELECT id::text, code, name, url, kind, labels, min_confidence, enabled, config FROM sources ORDER BY code", &[])?;
             Ok(rows
                 .iter()
                 .map(|r| SourceInfo {
                     id: r.get(0), code: r.get(1), name: r.get(2), url: r.get(3), kind: r.get(4), labels: r.get(5),
-                    min_confidence: r.get(6), enabled: r.get(7),
+                    min_confidence: r.get(6), enabled: r.get(7), config_raw: r.get(8), config: crate::config::EngineConfig::default(),
                 })
                 .collect())
         })
@@ -263,6 +273,10 @@ impl Repository for PgRepository {
                 })
                 .collect())
         })
+    }
+
+    fn engine_defaults(&self) -> Result<Value> {
+        self.with(|c| Ok(c.query_opt("SELECT value FROM engine_settings WHERE key='defaults'", &[])?.map_or(Value::Null, |r| r.get(0))))
     }
 
     fn update_source_state(
@@ -379,5 +393,133 @@ impl Repository for PgRepository {
             )?;
             Ok((r.get(0), r.get(1)))
         })
+    }
+}
+
+/// Integration tests against a real Postgres with migrations 001-005 applied. They run only when DATABASE_URL is set (CI sets it).
+#[cfg(test)]
+mod pg_tests {
+    use super::*;
+    use crate::model::Snapshot;
+    use serde_json::json;
+    use std::sync::Mutex as StdMutex;
+
+    /// The claim query looks at the whole `events` table, so these tests must not overlap.
+    static SERIAL: StdMutex<()> = StdMutex::new(());
+
+    fn repo() -> Option<PgRepository> {
+        std::env::var("DATABASE_URL").ok().map(|d| PgRepository::new(&d, 4))
+    }
+
+    fn seed_source(r: &PgRepository) -> String {
+        let code = format!("T-{}", Utc::now().timestamp_nanos_opt().unwrap_or_default());
+        r.with(|c| {
+            Ok(c.query_one(
+                "INSERT INTO sources (code, name, url, kind, config) VALUES ($1, 'Test', 'rtsp://x', 'rtsp', '{\"tracker\":{\"max_age\":7}}') RETURNING id::text",
+                &[&code],
+            )?
+            .get(0))
+        })
+        .unwrap()
+    }
+
+    fn cleanup(r: &PgRepository, source: &str) {
+        r.with(|c| {
+            c.execute("UPDATE events SET pipeline='skipped' WHERE source_id=$1::text::uuid", &[&source])?;
+            c.execute("DELETE FROM incidents WHERE source_id=$1::text::uuid", &[&source])?;
+            c.execute("DELETE FROM sources WHERE id=$1::text::uuid", &[&source])?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn count(r: &PgRepository, sql: &str, source: &str) -> i64 {
+        r.with(|c| Ok(c.query_one(sql, &[&source])?.get(0))).unwrap()
+    }
+
+    fn new_event<'a>(source: &'a str, incident: Option<&'a str>) -> NewEvent<'a> {
+        NewEvent {
+            source_id: source, incident_id: incident, label: "person", confidence: 0.9, severity: "HIGH", track_id: 1,
+            bbox: BBox { x: 0.1, y: 0.1, w: 0.2, h: 0.4 }, title: "Person detected at Test", detected_at: Utc::now(),
+        }
+    }
+
+    const SNAP: Snapshot = Snapshot { jpeg: Vec::new(), width: 4, height: 4 };
+
+    #[test]
+    fn a_transaction_commits_on_ok_and_rolls_back_on_err() {
+        let Some(r) = repo() else { return };
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        r.wait_ready(&std::sync::atomic::AtomicBool::new(false));
+        let src = seed_source(&r);
+        let snap = Snapshot { jpeg: vec![0xff, 0xd8, 1, 2], ..SNAP };
+        r.transaction(&mut |tx| {
+            let (inc, _code) = tx.create_incident("t", "HIGH", &src, "person", Utc::now())?;
+            let ev = tx.insert_event(&new_event(&src, Some(&inc)))?;
+            tx.insert_snapshot(&ev, &snap, Some(&BBox { x: 0.1, y: 0.1, w: 0.2, h: 0.4 }), 0, 0)?;
+            tx.add_timeline(&inc, "camera", "t", Some("d"), Some(&ev), Utc::now())?;
+            tx.set_event_speed(&ev, 42.5)?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count(&r, "SELECT count(*) FROM events WHERE source_id=$1::text::uuid AND speed_kmh = 42.5", &src), 1);
+        assert_eq!(count(&r, "SELECT count(*) FROM event_snapshots s JOIN events e ON e.id=s.event_id WHERE e.source_id=$1::text::uuid", &src), 1);
+        let failed = r.transaction(&mut |tx| {
+            tx.insert_event(&new_event(&src, None))?;
+            anyhow::bail!("boom")
+        });
+        assert!(failed.is_err());
+        assert_eq!(count(&r, "SELECT count(*) FROM events WHERE source_id=$1::text::uuid", &src), 1, "the failed transaction left nothing behind");
+        cleanup(&r, &src);
+    }
+
+    #[test]
+    fn claim_classify_and_flag_roundtrip() {
+        let Some(r) = repo() else { return };
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        r.wait_ready(&std::sync::atomic::AtomicBool::new(false));
+        let src = seed_source(&r);
+        let mut mine = String::new();
+        r.transaction(&mut |tx| {
+            mine = tx.insert_event(&new_event(&src, None))?;
+            tx.insert_snapshot(&mine, &Snapshot { jpeg: vec![0xff, 0xd8, 9], ..SNAP }, None, 0, 0)
+        })
+        .unwrap();
+        // ignore queued events that belong to someone else (a dev database may have some)
+        let others: Vec<String> = r
+            .with(|c| Ok(c.query("SELECT id::text FROM events WHERE pipeline='queued' AND source_id <> $1::text::uuid", &[&src])?.iter().map(|x| x.get(0)).collect()))
+            .unwrap();
+        let job = r.claim_queued_event(&others, 1).unwrap().expect("my event is queued");
+        assert_eq!(job.event_id, mine);
+        assert_eq!(job.jpeg.as_deref(), Some(&[0xff, 0xd8, 9][..]));
+        assert!(r.claim_queued_event(&others, 1).unwrap().is_none(), "claimed events are not handed out twice");
+
+        let result = Classification { label: "person".into(), confidence: 0.9, probs: [("person".to_string(), 0.9)].into(), model: "d1".into(), ms: 12 };
+        let flag = Flag { rule: "weapon".into(), title: "Weapon".into(), prob: Some(0.8), threshold: 0.7, severity: "CRITICAL".into(), triggered: true, opens_incident: true, detail: Some("x".into()) };
+        r.store_classification(&mine, &result, &[flag], None).unwrap();
+        let row = r
+            .with(|c| Ok(c.query_one("SELECT pipeline, suspicious, severity, incident_id IS NOT NULL, cls_flags FROM events WHERE id=$1::text::uuid", &[&mine])?))
+            .unwrap();
+        assert_eq!(row.get::<_, String>(0), "ready");
+        assert!(row.get::<_, bool>(1));
+        assert_eq!(row.get::<_, String>(2), "CRITICAL");
+        assert!(row.get::<_, bool>(3), "the indicator opened an incident for an event that had none");
+        assert_eq!(row.get::<_, Value>(4)[0]["rule"], json!("weapon"));
+        cleanup(&r, &src);
+    }
+
+    #[test]
+    fn sources_carry_their_config_and_defaults_are_readable() {
+        let Some(r) = repo() else { return };
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        r.wait_ready(&std::sync::atomic::AtomicBool::new(false));
+        let src = seed_source(&r);
+        let listed = r.list_sources().unwrap().into_iter().find(|s| s.id == src).expect("listed");
+        assert_eq!(listed.config_raw["tracker"]["max_age"], json!(7));
+        assert!(r.engine_defaults().unwrap().is_object());
+        assert!(r.list_categories().unwrap().contains_key("person"));
+        assert!(!r.list_behavior_rules().unwrap().is_empty());
+        r.heartbeat("test-worker", 1, "m", Some("d1 @ x")).unwrap();
+        cleanup(&r, &src);
     }
 }

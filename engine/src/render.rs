@@ -4,11 +4,14 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
 use image::{ExtendedColorType, RgbImage};
 
+use crate::config::Axis;
 use crate::decode::Frame;
 use crate::model::{BBox, Snapshot};
 
 const ACCENT: [u8; 3] = [0x4A, 0x9F, 0xD8];
 const INK: [u8; 3] = [0x06, 0x12, 0x1C];
+const OVER_LIMIT: [u8; 3] = [0xFF, 0x6B, 0x6B]; // sev-critical
+const GEOMETRY: [u8; 3] = [0xFF, 0xD6, 0x0A];
 
 pub fn encode_jpeg(img: &RgbImage, quality: u8) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(64 * 1024);
@@ -44,26 +47,83 @@ pub fn snapshot_jpeg(frame: &Frame, max_width: u32, quality: u8) -> Result<Snaps
     Ok(Snapshot { jpeg: encode_jpeg(&img, quality)?, width: img.width() as i32, height: img.height() as i32 })
 }
 
-/// One live detection: label, score, normalised x1y1x2y2.
-pub type LiveDet = (String, f32, [f32; 4]);
+/// One live detection with its estimated speed, when the camera is calibrated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveDet {
+    pub label: String,
+    pub score: f32,
+    /// x1,y1,x2,y2 normalised 0..1
+    pub bbox: [f32; 4],
+    pub speed_kmh: Option<f32>,
+    pub over_limit: bool,
+}
 
-pub fn annotate(frame: &Frame, dets: &[LiveDet], max_width: u32) -> Result<Vec<u8>> {
+/// Calibration geometry drawn over the live view (fractions of the frame).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Geometry {
+    Lines { axis: Axis, line1: f32, line2: f32 },
+    Quad([[f32; 2]; 4]),
+}
+
+pub fn annotate(frame: &Frame, dets: &[LiveDet], geometry: Option<&Geometry>, max_width: u32) -> Result<Vec<u8>> {
     let mut img = frame_image(frame, max_width);
     let (w, h) = (img.width() as f32, img.height() as f32);
     let thick = ((w / 480.0).round() as i32).max(2);
     let scale = if w >= 900.0 { 2 } else { 1 };
-    for (label, score, b) in dets {
-        let (x1, y1) = ((b[0] * w) as i32, (b[1] * h) as i32);
-        let (x2, y2) = ((b[2] * w) as i32, (b[3] * h) as i32);
-        rect(&mut img, x1, y1, x2, y2, thick, ACCENT);
-        let text = format!("{} {:.2}", label.to_uppercase(), score);
+    match geometry {
+        Some(Geometry::Lines { axis, line1, line2 }) => {
+            for l in [line1, line2] {
+                match axis {
+                    Axis::X => line(&mut img, (l * w) as i32, 0, (l * w) as i32, h as i32, 1, GEOMETRY),
+                    Axis::Y => line(&mut img, 0, (l * h) as i32, w as i32, (l * h) as i32, 1, GEOMETRY),
+                }
+            }
+        }
+        Some(Geometry::Quad(p)) => {
+            for i in 0..4 {
+                let (a, b) = (p[i], p[(i + 1) % 4]);
+                line(&mut img, (a[0] * w) as i32, (a[1] * h) as i32, (b[0] * w) as i32, (b[1] * h) as i32, 1, GEOMETRY);
+            }
+        }
+        None => {}
+    }
+    for d in dets {
+        let colour = if d.over_limit { OVER_LIMIT } else { ACCENT };
+        let (x1, y1) = ((d.bbox[0] * w) as i32, (d.bbox[1] * h) as i32);
+        let (x2, y2) = ((d.bbox[2] * w) as i32, (d.bbox[3] * h) as i32);
+        rect(&mut img, x1, y1, x2, y2, thick, colour);
+        let mut text = format!("{} {:.2}", d.label.to_uppercase(), d.score);
+        if let Some(k) = d.speed_kmh {
+            text.push_str(&format!(" {k:.0} KMH"));
+        }
         let tw = text_width(&text, scale) + 8;
         let th = 7 * scale + 6;
         let top = (y1 - th).max(0);
-        fill(&mut img, x1, top, x1 + tw, top + th, ACCENT);
+        fill(&mut img, x1, top, x1 + tw, top + th, colour);
         draw_text(&mut img, x1 + 4, top + 3, &text, scale, INK);
     }
     encode_jpeg(&img, 80)
+}
+
+fn line(img: &mut RgbImage, x0: i32, y0: i32, x1: i32, y1: i32, t: i32, c: [u8; 3]) {
+    let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+    let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+    let (mut x, mut y, mut err) = (x0, y0, dx + dy);
+    loop {
+        fill(img, x, y, x + t, y + t, c);
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
 }
 
 /// Crop around a normalised box (+`margin` of its larger side on every side, clamped); the full frame when the crop would

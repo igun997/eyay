@@ -16,6 +16,7 @@ pub fn source(labels: &[&str], min_confidence: f32) -> SourceInfo {
     SourceInfo {
         id: "src-1".into(), code: "CAM-01".into(), name: "Dock 2".into(), url: "rtsp://x".into(), kind: "rtsp".into(),
         labels: labels.iter().map(|s| (*s).into()).collect(), min_confidence, enabled: true,
+        config_raw: serde_json::Value::Null, config: crate::config::EngineConfig::default(),
     }
 }
 
@@ -39,6 +40,7 @@ pub struct FEvent {
     pub indication_kind: Option<String>,
     pub indication: Option<String>,
     pub burst_ms: Option<i32>,
+    pub speed_kmh: Option<f32>,
     pub pipeline: String,
     pub cls_label: Option<String>,
     pub cls_confidence: Option<f32>,
@@ -145,6 +147,11 @@ impl Tx for FakeTx<'_> {
         Ok(())
     }
 
+    fn set_event_speed(&mut self, event_id: &str, kmh: f32) -> Result<()> {
+        self.0.events.get_mut(event_id).expect("event").speed_kmh = Some(kmh);
+        Ok(())
+    }
+
     fn lock_event(&mut self, event_id: &str) -> Result<Option<EventState>> {
         Ok(self.0.events.get(event_id).map(|e| EventState {
             id: event_id.into(), incident_id: e.incident_id.clone(),
@@ -196,6 +203,10 @@ impl Repository for FakeRepo {
 
     fn list_behavior_rules(&self) -> Result<Vec<Rule>> {
         Ok(vec![])
+    }
+
+    fn engine_defaults(&self) -> Result<Value> {
+        Ok(json!({}))
     }
 
     fn update_source_state(&self, _: &str, _: &str, _: Option<&str>, _: Option<DateTime<Utc>>, _: Option<f32>, _: Option<f32>) -> Result<()> {

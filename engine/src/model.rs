@@ -1,5 +1,8 @@
 //! Plain data shared by the worker modules (mirrors `worker/eyeai_worker/models.py`).
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::config::EngineConfig;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceInfo {
@@ -11,14 +14,16 @@ pub struct SourceInfo {
     pub labels: Vec<String>,
     pub min_confidence: f32,
     pub enabled: bool,
+    /// `sources.config` as stored
+    pub config_raw: Value,
+    /// defaults < engine_settings < sources.config, resolved by the manager (docs/ENGINE_CONFIG.md)
+    pub config: EngineConfig,
 }
 
 impl SourceInfo {
-    /// Changing any of these needs a new connection / detector.
-    pub fn restart_key(&self) -> (String, String, Vec<String>, i64) {
-        let mut labels = self.labels.clone();
-        labels.sort();
-        (self.url.clone(), self.kind.clone(), labels, (f64::from(self.min_confidence) * 10_000.0).round() as i64)
+    /// Changing any of these needs a new connection / detector session. Labels, confidence and every other setting apply live.
+    pub fn restart_key(&self) -> (String, String, Option<usize>) {
+        (self.url.clone(), self.kind.clone(), self.config.detector.intra_threads)
     }
 }
 
@@ -94,11 +99,15 @@ mod tests {
     }
 
     #[test]
-    fn restart_key_ignores_label_order_and_name() {
-        let mk = |labels: &[&str], name: &str| SourceInfo {
+    fn restart_key_only_changes_for_connection_and_session_settings() {
+        let mk = |labels: &[&str], name: &str, conf: f32| SourceInfo {
             id: "1".into(), code: "C".into(), name: name.into(), url: "u".into(), kind: "rtsp".into(),
-            labels: labels.iter().map(|s| s.to_string()).collect(), min_confidence: 0.4, enabled: true,
+            labels: labels.iter().map(|s| s.to_string()).collect(), min_confidence: conf, enabled: true,
+            config_raw: Value::Null, config: EngineConfig::default(),
         };
-        assert_eq!(mk(&["car", "person"], "a").restart_key(), mk(&["person", "car"], "b").restart_key());
+        assert_eq!(mk(&["car", "person"], "a", 0.4).restart_key(), mk(&["person"], "b", 0.6).restart_key(), "labels, name and confidence are live");
+        let mut threaded = mk(&["car"], "a", 0.4);
+        threaded.config.detector.intra_threads = Some(4);
+        assert_ne!(threaded.restart_key(), mk(&["car"], "a", 0.4).restart_key());
     }
 }

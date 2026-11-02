@@ -5,6 +5,7 @@ mod behavior;
 mod burst;
 mod classifier;
 mod coco;
+mod config;
 mod decision;
 mod decode;
 mod detector;
@@ -14,6 +15,7 @@ mod render;
 mod repo;
 mod settings;
 mod source;
+mod speed;
 mod tracker;
 
 #[cfg(test)]

@@ -108,11 +108,11 @@ fn handle(req: Request, mgr: &WorkerManager, classifier: &StatusFn) {
 
 /// (sequence, annotated JPEG) of the latest frame, only the boxes of watched labels.
 fn render(r: &SourceRunner) -> Option<(u64, Vec<u8>)> {
-    let (seq, frame, dets) = r.live();
+    let (seq, frame, dets, geometry) = r.live();
     let frame = frame?;
     let watched = r.source().labels;
-    let dets: Vec<_> = dets.into_iter().filter(|d| watched.contains(&d.0)).collect();
-    annotate(&frame, &dets, MAX_WIDTH).ok().map(|j| (seq, j))
+    let dets: Vec<_> = dets.into_iter().filter(|d| watched.contains(&d.label)).collect();
+    annotate(&frame, &dets, geometry.as_ref(), MAX_WIDTH).ok().map(|j| (seq, j))
 }
 
 /// `multipart/x-mixed-replace` body: blocks until the next distinct frame, ends when the source stops.
@@ -135,8 +135,8 @@ impl Read for Mjpeg {
             if !self.runner.alive() {
                 return Ok(0);
             }
-            let (seq, _, dets) = self.runner.live();
-            let key = (seq, dets.iter().map(|d| (d.0.clone(), (d.1 * 100.0).round() as i32)).collect::<Vec<_>>());
+            let (seq, _, dets, _) = self.runner.live();
+            let key = (seq, dets.iter().map(|d| (d.label.clone(), (d.score * 100.0).round() as i32 + d.speed_kmh.map_or(0, |k| k.round() as i32) * 1000)).collect::<Vec<_>>());
             if self.last_key.as_ref() != Some(&key) {
                 if let Some((_, jpeg)) = render(&self.runner) {
                     self.last_key = Some(key);

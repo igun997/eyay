@@ -1,7 +1,0 @@
-*
-!worker/requirements.txt
-!worker/eyeai_worker
-!src/eyeai
-!docker/fetch_model.py
-**/__pycache__
-**/*.pyc

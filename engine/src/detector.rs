@@ -176,6 +176,21 @@ impl Yolox {
         })
     }
 
+    /// Apply confidence, NMS and the watched labels without rebuilding the session.
+    pub fn reconfigure(&mut self, conf: f32, nms: f32, classes: &[String]) -> Result<()> {
+        let mut ids = Vec::new();
+        for name in classes {
+            ids.push(COCO_CLASSES.iter().position(|c| c == name).ok_or_else(|| anyhow!("class {name:?} is not in COCO-80"))?);
+        }
+        if ids.is_empty() {
+            bail!("source watches no labels");
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        (self.conf, self.nms, self.classes) = (conf, nms, ids);
+        Ok(())
+    }
+
     pub fn detect(&mut self, frame: &Frame) -> Result<Vec<Detection>> {
         let r = letterbox_into(frame, self.size, &mut self.input);
         let tensor = TensorRef::from_array_view(self.input.view())?;

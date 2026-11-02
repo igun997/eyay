@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use tracing::{error, info};
 
 use crate::behavior::RuleCache;
+use crate::config::EngineConfig;
 use crate::settings::Settings;
 use crate::source::{Categories, RunnerCtx, SourceRunner};
 
@@ -48,7 +49,24 @@ impl WorkerManager {
     }
 
     pub fn tick(&self) -> Result<()> {
-        let sources: HashMap<String, _> = self.repo.list_sources()?.into_iter().map(|s| (s.id.clone(), s)).collect();
+        let defaults = self.repo.engine_defaults().unwrap_or_else(|e| {
+            error!("loading engine defaults failed: {e:#}");
+            serde_json::Value::Null
+        });
+        let sources: HashMap<String, _> = self
+            .repo
+            .list_sources()?
+            .into_iter()
+            .map(|mut s| {
+                s.config = EngineConfig::resolve(&defaults, &s.config_raw);
+                // process-wide settings (env) fill what neither the dashboard defaults nor the camera set
+                s.config.detector.target_fps.get_or_insert(self.settings.target_fps);
+                if s.config.detector.intra_threads.is_none() {
+                    s.config.detector.intra_threads = self.settings.ort_threads;
+                }
+                (s.id.clone(), s)
+            })
+            .collect();
         *self.categories.write().unwrap() = self.repo.list_categories()?;
         let current: Vec<(String, Arc<SourceRunner>)> = self.runners.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         for (sid, runner) in current {

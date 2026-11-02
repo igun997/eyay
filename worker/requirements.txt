@@ -1,8 +1,0 @@
-numpy
-scipy
-pydantic>=2
-opencv-python-headless
-onnxruntime
-psycopg[binary,pool]>=3.2
-fastapi
-uvicorn

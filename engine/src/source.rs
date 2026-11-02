@@ -11,12 +11,14 @@ use tracing::{error, info, warn};
 
 use crate::behavior::RuleCache;
 use crate::burst::BurstManager;
+use crate::config::{CalibrationCfg, Method};
 use crate::decision::EventDecider;
 use crate::decode::{Decoder, Frame, redact};
 use crate::detector::Yolox;
 use crate::model::{Category, SourceInfo};
-use crate::render::{LiveDet, snapshot_jpeg};
+use crate::render::{Geometry, LiveDet, snapshot_jpeg};
 use crate::repo::Repository;
+use crate::speed::SpeedEstimator;
 use crate::tracker::IouTracker;
 
 /// Boxes older than this are not drawn on live frames.
@@ -42,6 +44,7 @@ struct Live {
     seq: u64,
     frame: Option<Arc<Frame>>,
     dets: Vec<LiveDet>,
+    geometry: Option<Geometry>,
     dets_at: Option<Instant>,
 }
 
@@ -59,7 +62,7 @@ pub struct SourceRunner {
     status: Arc<Mutex<String>>,
     thread: Mutex<Option<JoinHandle<()>>>,
     thread_done: Arc<AtomicBool>,
-    pub restart_key: (String, String, Vec<String>, i64),
+    pub restart_key: (String, String, Option<usize>),
     pub code: String,
 }
 
@@ -114,11 +117,11 @@ impl SourceRunner {
         }
     }
 
-    /// (sequence, latest frame, boxes still fresh enough to draw)
-    pub fn live(&self) -> (u64, Option<Arc<Frame>>, Vec<LiveDet>) {
+    /// (sequence, latest frame, boxes still fresh enough to draw, calibration geometry to overlay)
+    pub fn live(&self) -> (u64, Option<Arc<Frame>>, Vec<LiveDet>, Option<Geometry>) {
         let l = self.live.lock().unwrap();
         let fresh = l.dets_at.is_some_and(|t| t.elapsed() < DETS_TTL);
-        (l.seq, l.frame.clone(), if fresh { l.dets.clone() } else { Vec::new() })
+        (l.seq, l.frame.clone(), if fresh { l.dets.clone() } else { Vec::new() }, l.geometry.clone())
     }
 }
 
@@ -156,7 +159,8 @@ impl Worker {
         let mut decider = EventDecider::new(self.ctx.repo.clone(), src.clone());
         while !self.stop.load(Ordering::Relaxed) {
             if detector.is_none() {
-                match Yolox::load(&self.ctx.model, src.min_confidence, 0.45, &src.labels, self.ctx.ort_threads) {
+                let cur = self.shared.lock().unwrap().clone();
+                match Yolox::load(&self.ctx.model, cur.min_confidence, cur.config.detector.nms_iou, &cur.labels, cur.config.detector.intra_threads) {
                     Ok(d) => detector = Some(d),
                     Err(e) => {
                         error!("{}: detector unavailable: {e:#}", src.code);
@@ -180,12 +184,13 @@ impl Worker {
             let latest = Arc::new(Mutex::new(Latest::default()));
             let ended = Arc::new(AtomicBool::new(false));
             let reader_stop = Arc::new(AtomicBool::new(false));
-            let pace = (src.kind == "m3u8").then(|| decoder.fps().clamp(1.0, 60.0) * 1.1);
+            let fps = decoder.fps();
+            let pace = (src.kind == "m3u8").then(|| fps.clamp(1.0, 60.0) * 1.1);
             let reader = {
                 let (latest, ended, reader_stop) = (latest.clone(), ended.clone(), reader_stop.clone());
                 thread::spawn(move || read_loop(decoder, pace, latest, ended, reader_stop))
             };
-            let online = self.serve(&latest, &ended, detector.as_mut().expect("loaded"), &mut decider, &mut bursts);
+            let online = self.serve(&latest, &ended, fps, detector.as_mut().expect("loaded"), &mut decider, &mut bursts);
             bursts.flush(Utc::now()); // stream lost / stopping: finish bursts with what we have
             reader_stop.store(true, Ordering::SeqCst);
             let _ = reader.join();
@@ -206,14 +211,18 @@ impl Worker {
 
     /// Returns true if at least one frame was processed before the stream dropped.
     fn serve(
-        &self, latest: &Mutex<Latest>, ended: &AtomicBool, detector: &mut Yolox, decider: &mut EventDecider, bursts: &mut BurstManager,
+        &self, latest: &Mutex<Latest>, ended: &AtomicBool, fps: f32, detector: &mut Yolox, decider: &mut EventDecider,
+        bursts: &mut BurstManager,
     ) -> bool {
         let mut tracker = IouTracker::default();
         let (mut last_seq, mut online) = (0u64, false);
         let mut last_infer = Instant::now() - Duration::from_secs(3600);
         let mut last_new = Instant::now();
         let (mut window_start, mut window_n, mut window_ms) = (Instant::now(), 0u32, 0.0f32);
-        let min_gap = Duration::from_secs_f32(1.0 / self.ctx.target_fps.max(0.1));
+        let mut applied: Option<(f32, f32, Vec<String>)> = None; // detector settings currently in effect
+        let mut calibration: Option<CalibrationCfg> = None;       // calibration the estimator was built from
+        let mut speed: Option<SpeedEstimator> = None;
+        let fps = f64::from(fps.max(1.0));
         while !self.stop.load(Ordering::Relaxed) {
             let (seq, frame) = {
                 let l = latest.lock().unwrap();
@@ -229,16 +238,40 @@ impl Worker {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             };
+            let src = self.shared.lock().unwrap().clone();
+            let min_gap = Duration::from_secs_f32(1.0 / src.config.detector.target_fps.unwrap_or(self.ctx.target_fps).max(0.1));
             if seq == last_seq || now - last_infer < min_gap {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
             last_seq = seq;
             last_infer = now;
-            let src = self.shared.lock().unwrap().clone();
             if decider.source != src {
                 decider.source = src.clone();
                 bursts.source = src.clone();
+            }
+            // live settings: no reconnect needed
+            let want = (src.min_confidence, src.config.detector.nms_iou, src.labels.clone());
+            if applied.as_ref() != Some(&want) {
+                match detector.reconfigure(want.0, want.1, &want.2) {
+                    Ok(()) => applied = Some(want),
+                    Err(e) => {
+                        error!("{}: detector settings rejected: {e:#}", src.code);
+                        applied = Some(want); // do not retry every frame; the next edit triggers another attempt
+                    }
+                }
+            }
+            tracker.set_params(src.config.tracker.iou_threshold, src.config.tracker.max_age);
+            if calibration.as_ref() != Some(&src.config.calibration) {
+                calibration = Some(src.config.calibration.clone());
+                speed = match SpeedEstimator::new(&src.config.calibration) {
+                    None => None,
+                    Some(Ok(e)) => Some(e),
+                    Some(Err(e)) => {
+                        warn!("{}: speed calibration unusable: {e:#}", src.code);
+                        None
+                    }
+                };
             }
             if !online {
                 online = true;
@@ -255,11 +288,23 @@ impl Worker {
             };
             let infer_ms = t0.elapsed().as_secs_f32() * 1000.0;
             let tracked = tracker.update(&dets);
+            let readings = speed.as_mut().map(|e| e.update(&tracked, seq as f64 / fps)).unwrap_or_default();
+            let cal = &src.config.calibration;
             {
                 let mut l = self.live.lock().unwrap();
                 l.seq = seq;
                 l.frame = Some(frame.clone());
-                l.dets = tracked.iter().map(|t| (t.label.clone(), t.score, t.bbox)).collect();
+                l.dets = tracked
+                    .iter()
+                    .map(|t| {
+                        let kmh = readings.iter().find(|(l, r)| *l == t.label && r.track_id == t.track_id).map(|(_, r)| r.kmh);
+                        LiveDet {
+                            label: t.label.clone(), score: t.score, bbox: t.bbox, speed_kmh: kmh,
+                            over_limit: kmh.is_some_and(|k| k > cal.speed_limit_kmh),
+                        }
+                    })
+                    .collect();
+                l.geometry = geometry(cal, speed.is_some());
                 l.dets_at = Some(Instant::now());
             }
             let now_utc = Utc::now();
@@ -269,6 +314,7 @@ impl Worker {
             for rec in decider.process(&tracked, &cats, &snap, now_utc) {
                 bursts.start(&rec, &tracked, &cats, now_utc);
             }
+            decider.apply_speeds(&readings, now_utc);
             window_n += 1;
             window_ms += infer_ms;
             if window_start.elapsed() >= Duration::from_secs(5) {
@@ -278,6 +324,18 @@ impl Worker {
             }
         }
         online
+    }
+}
+
+/// What to draw over the live view for this calibration (nothing when speed is off or `show_geometry` is false).
+fn geometry(cal: &CalibrationCfg, active: bool) -> Option<Geometry> {
+    if !active || !cal.show_geometry {
+        return None;
+    }
+    match cal.method {
+        Method::Line => Some(Geometry::Lines { axis: cal.line_axis, line1: cal.line1, line2: cal.line2 }),
+        Method::Homography if cal.pixels.len() == 4 => Some(Geometry::Quad([cal.pixels[0], cal.pixels[1], cal.pixels[2], cal.pixels[3]])),
+        _ => None,
     }
 }
 
