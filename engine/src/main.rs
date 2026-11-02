@@ -31,6 +31,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::behavior::RuleCache;
 use crate::classifier::ClassifierService;
+use crate::config::TuningCache;
 use crate::manager::WorkerManager;
 use crate::repo::{PgRepository, Repository};
 use crate::settings::Settings;
@@ -63,7 +64,8 @@ fn main() -> Result<()> {
     let manager = WorkerManager::new(repo.clone(), settings.clone(), rules.clone());
 
     let cls_rules = rules.clone();
-    let classifier = ClassifierService::new(cls_repo.clone(), settings.classifier.clone(), Box::new(move || cls_rules.get()))?;
+    let tuning = Arc::new(TuningCache::new(cls_repo.clone(), Duration::from_secs(30)));
+    let classifier = ClassifierService::new(cls_repo.clone(), settings.classifier.clone(), Box::new(move || cls_rules.get()), Box::new(move || tuning.get()))?;
     let status = classifier.status_fn();
 
     let mgr_thread = {

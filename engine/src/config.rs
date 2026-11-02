@@ -33,6 +33,13 @@ pub struct TrackerCfg {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct EventsCfg {
+    /// 0 = off. A track that never produced an event may open one this many seconds after the last event of its label even
+    /// while the category cooldown runs.
+    pub new_track_gap_s: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CalibrationCfg {
     pub method: Method,
     pub speed_limit_kmh: f32,
@@ -52,6 +59,7 @@ pub struct CalibrationCfg {
 pub struct EngineConfig {
     pub detector: DetectorCfg,
     pub tracker: TrackerCfg,
+    pub events: EventsCfg,
     pub calibration: CalibrationCfg,
 }
 
@@ -60,6 +68,7 @@ impl Default for EngineConfig {
         Self {
             detector: DetectorCfg { nms_iou: 0.45, target_fps: None, intra_threads: None },
             tracker: TrackerCfg { iou_threshold: 0.3, max_age: 10, min_hits: 2 },
+            events: EventsCfg { new_track_gap_s: 0.0 },
             calibration: CalibrationCfg {
                 method: Method::None, speed_limit_kmh: 50.0, speed_severity: "HIGH".into(), show_geometry: true, line_axis: Axis::X,
                 line1: 0.4, line2: 0.7, distance_m: 20.0, pixels: Vec::new(), world_m: Vec::new(), smoothing: 0.4,
@@ -108,7 +117,10 @@ fn points(v: &Value, path: &[&str], lo: f64, hi: f64) -> Option<Vec<[f32; 2]>> {
 impl EngineConfig {
     /// Apply one layer of JSON over `self`. Call with the global defaults first, then the per-camera config.
     pub fn apply(mut self, layer: &Value) -> Self {
-        let (d, t, c) = (&mut self.detector, &mut self.tracker, &mut self.calibration);
+        let (d, t, c, e) = (&mut self.detector, &mut self.tracker, &mut self.calibration, &mut self.events);
+        if let Some(v) = num(layer, &["events", "new_track_gap_s"], 0.0, 300.0) {
+            e.new_track_gap_s = v as f32;
+        }
         if let Some(v) = num(layer, &["detector", "nms_iou"], 0.1, 0.9) {
             d.nms_iou = v as f32;
         }
@@ -194,6 +206,52 @@ impl EngineConfig {
     }
 }
 
+/// `ClassifierTuning` from the database, refreshed at most every `ttl`; keeps the last good value if the DB hiccups.
+pub struct TuningCache {
+    repo: std::sync::Arc<dyn crate::repo::Repository>,
+    ttl: std::time::Duration,
+    state: std::sync::Mutex<(ClassifierTuning, Option<std::time::Instant>)>,
+}
+
+impl TuningCache {
+    pub fn new(repo: std::sync::Arc<dyn crate::repo::Repository>, ttl: std::time::Duration) -> Self {
+        Self { repo, ttl, state: std::sync::Mutex::new((ClassifierTuning::default(), None)) }
+    }
+
+    pub fn get(&self) -> ClassifierTuning {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.1.is_none_or(|at| at.elapsed() >= self.ttl) {
+            match self.repo.engine_defaults() {
+                Ok(v) => st.0 = ClassifierTuning::from_defaults(&v),
+                Err(e) => warn!("loading classifier tuning failed; keeping the previous values: {e:#}"),
+            }
+            st.1 = Some(std::time::Instant::now());
+        }
+        st.0.clone()
+    }
+}
+
+/// Classifier settings from `engine_settings 'defaults'` under `classifier` (global only). Unset keys fall back to the environment.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClassifierTuning {
+    pub rules_enabled: Option<bool>,
+    pub rule_frames: Option<usize>,
+    pub rule_max_queue: Option<i64>,
+    pub batch: Option<bool>,
+}
+
+impl ClassifierTuning {
+    pub fn from_defaults(defaults: &Value) -> Self {
+        let c = &defaults["classifier"];
+        Self {
+            rules_enabled: c["rules_enabled"].as_bool(),
+            rule_frames: num(defaults, &["classifier", "rule_frames"], 1.0, 6.0).map(|v| v as usize),
+            rule_max_queue: num(defaults, &["classifier", "rule_max_queue"], 0.0, 200.0).map(|v| v as i64),
+            batch: c["batch"].as_bool(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +293,15 @@ mod tests {
         assert_eq!((c.method, c.pixels.len(), c.world_m.len()), (Method::Homography, 4, 4));
         let bad = EngineConfig::resolve(&json!({}), &json!({"calibration": {"pixels": [[0.1, 1.5], [0.1, 0.5], [0.9, 0.5], [0.9, 0.9]]}})).calibration;
         assert!(bad.pixels.is_empty());
+    }
+
+    #[test]
+    fn new_track_gap_is_bounded_and_classifier_tuning_reads_only_valid_keys() {
+        let c = EngineConfig::resolve(&json!({"events": {"new_track_gap_s": 8}}), &json!({}));
+        assert_eq!(c.events.new_track_gap_s, 8.0);
+        assert_eq!(EngineConfig::resolve(&json!({"events": {"new_track_gap_s": 999}}), &json!({})).events.new_track_gap_s, 0.0);
+        let t = ClassifierTuning::from_defaults(&json!({"classifier": {"rule_frames": 3, "batch": true, "rule_max_queue": 500}}));
+        assert_eq!((t.rule_frames, t.batch, t.rule_max_queue, t.rules_enabled), (Some(3), Some(true), None, None));
+        assert_eq!(ClassifierTuning::from_defaults(&json!({})), ClassifierTuning::default());
     }
 }

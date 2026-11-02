@@ -74,13 +74,20 @@ impl EventDecider {
         for label in labels {
             let cands = &by_label[label];
             let cat = &cats[label];
+            let fresh: Vec<&&Tracked> = cands.iter().filter(|t| !self.reported.contains_key(&(t.label.clone(), t.track_id))).collect();
+            let mut only_fresh = false;
             if let Some(last) = self.last_event.get(label) {
-                if (now - *last).num_milliseconds() < i64::from(cat.cooldown_s) * 1000 {
-                    continue;
+                let since_ms = (now - *last).num_milliseconds();
+                if since_ms < i64::from(cat.cooldown_s) * 1000 {
+                    // cooling down: only a track nobody has reported yet may break through, and only after the configured gap
+                    let gap_ms = (f64::from(self.source.config.events.new_track_gap_s) * 1000.0) as i64;
+                    if gap_ms <= 0 || since_ms < gap_ms || fresh.is_empty() {
+                        continue;
+                    }
+                    only_fresh = true;
                 }
             }
-            let fresh: Vec<&&Tracked> = cands.iter().filter(|t| !self.reported.contains_key(&(t.label.clone(), t.track_id))).collect();
-            let pool: Vec<&&Tracked> = if fresh.is_empty() { cands.iter().collect() } else { fresh };
+            let pool: Vec<&&Tracked> = if fresh.is_empty() && !only_fresh { cands.iter().collect() } else { fresh };
             let best = pool.into_iter().max_by(|a, b| a.score.total_cmp(&b.score)).expect("non-empty");
             if snap.is_none() {
                 match snapshot() {
@@ -291,5 +298,22 @@ mod tests {
         // a track without an event is ignored
         d.apply_speeds(&[("car".into(), SpeedReading { track_id: 99, kmh: 90.0 })], now);
         assert_eq!(repo.state().events.len(), 1);
+    }
+
+    #[test]
+    fn a_new_track_may_break_the_cooldown_after_the_gap_but_a_reported_one_may_not() {
+        let (repo, mut d, cats) = setup();
+        d.source.config.events.new_track_gap_s = 5.0;
+        let t0 = Utc::now();
+        d.process(&[tr("person", 1, 0.9)], &cats, &snap, t0);
+        assert_eq!(d.process(&[tr("person", 1, 0.9)], &cats, &snap, t0).len(), 1);
+        let two = [tr("person", 1, 0.9), tr("person", 2, 0.8)];
+        d.process(&two, &cats, &snap, t0 + Duration::seconds(2)); // track 2 seen once, still inside the gap
+        assert!(d.process(&two, &cats, &snap, t0 + Duration::seconds(3)).is_empty(), "gap of 5 s has not passed");
+        let r = d.process(&two, &cats, &snap, t0 + Duration::seconds(6));
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].track_id, 2, "only the new track breaks through the 30 s cooldown");
+        assert!(d.process(&[tr("person", 1, 0.9)], &cats, &snap, t0 + Duration::seconds(12)).is_empty(), "a reported track waits for the cooldown");
+        assert_eq!(repo.state().events.len(), 2);
     }
 }

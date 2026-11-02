@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use tracing::{error, info, warn};
 
 use crate::behavior::{Flag, Rule};
+use crate::config::ClassifierTuning;
 use crate::model::BBox;
 use crate::render::crop_jpeg;
 use crate::repo::Repository;
@@ -238,15 +239,19 @@ pub struct ClassifierService {
     pub cfg: ClassifierConfig,
     client: Option<DecisionClient>,
     rules: Box<dyn Fn() -> Vec<Rule> + Send + Sync>,
+    tuning: Box<dyn Fn() -> ClassifierTuning + Send + Sync>,
     attempts: HashMap<String, u32>,
     retry_at: HashMap<String, Instant>,
     stats: Arc<Mutex<(i64, i64)>>,
 }
 
 impl ClassifierService {
-    pub fn new(repo: Arc<dyn Repository>, cfg: ClassifierConfig, rules: Box<dyn Fn() -> Vec<Rule> + Send + Sync>) -> anyhow::Result<Self> {
+    pub fn new(
+        repo: Arc<dyn Repository>, cfg: ClassifierConfig, rules: Box<dyn Fn() -> Vec<Rule> + Send + Sync>,
+        tuning: Box<dyn Fn() -> ClassifierTuning + Send + Sync>,
+    ) -> anyhow::Result<Self> {
         let client = if cfg.enabled() { Some(DecisionClient::new(&cfg)?) } else { None };
-        Ok(Self { repo, cfg, client, rules, attempts: HashMap::new(), retry_at: HashMap::new(), stats: Arc::new(Mutex::new((0, 0))) })
+        Ok(Self { repo, cfg, client, rules, tuning, attempts: HashMap::new(), retry_at: HashMap::new(), stats: Arc::new(Mutex::new((0, 0))) })
     }
 
     /// A handle for /health that keeps working after the service moved into its thread.
@@ -264,7 +269,14 @@ impl ClassifierService {
     /// Classify at most one queued event. Returns true when an event was processed (success or failure).
     pub fn run_once(&mut self, now: Instant) -> anyhow::Result<bool> {
         let backoff: Vec<String> = self.retry_at.iter().filter(|(_, t)| **t > now).map(|(i, _)| i.clone()).collect();
-        let frames = if self.cfg.rules_enabled { self.cfg.rule_frames } else { 1 };
+        // dashboard settings (engine_settings 'defaults' -> classifier) override the environment, live
+        let t = (self.tuning)();
+        let mut cfg = self.cfg.clone();
+        cfg.rules_enabled = t.rules_enabled.unwrap_or(cfg.rules_enabled);
+        cfg.rule_frames = t.rule_frames.unwrap_or(cfg.rule_frames);
+        cfg.rule_max_queue = t.rule_max_queue.unwrap_or(cfg.rule_max_queue);
+        cfg.batch = t.batch.unwrap_or(cfg.batch);
+        let frames = if cfg.rules_enabled { cfg.rule_frames } else { 1 };
         let Some(job) = self.repo.claim_queued_event(&backoff, frames)? else { return Ok(false) };
         let Some(jpeg) = job.jpeg.as_deref() else {
             self.repo.store_classification_failure(&job.event_id, "event has no snapshot", false)?;
@@ -295,7 +307,7 @@ impl ClassifierService {
         self.attempts.remove(&job.event_id);
         self.retry_at.remove(&job.event_id);
         let class_ms = result.ms;
-        let (flags, rule_error) = self.evaluate_rules(&job, &result);
+        let (flags, rule_error) = self.evaluate_rules(&cfg, &job, &result);
         result.ms = started.elapsed().as_millis() as u64; // cls_ms = class + rules
         self.repo.store_classification(&job.event_id, &result, &flags, rule_error.as_deref())?;
         let hits: Vec<&str> = flags.iter().filter(|f| f.triggered).map(|f| f.rule.as_str()).collect();
@@ -307,8 +319,7 @@ impl ClassifierService {
     }
 
     /// Ask the yes/no rule questions. Never fails and never loses the class result (a failed rule has prob None).
-    fn evaluate_rules(&self, job: &ClassifyJob, result: &Classification) -> (Vec<Flag>, Option<String>) {
-        let cfg = &self.cfg;
+    fn evaluate_rules(&self, cfg: &ClassifierConfig, job: &ClassifyJob, result: &Classification) -> (Vec<Flag>, Option<String>) {
         let client = self.client.as_ref().expect("enabled");
         if !cfg.rules_enabled || result.label == "false_alarm" {
             return (vec![], None);
@@ -438,7 +449,7 @@ mod tests {
     }
 
     fn service(repo: &Arc<FakeRepo>, cfg: ClassifierConfig, rules: Vec<Rule>) -> ClassifierService {
-        ClassifierService::new(repo.clone(), cfg, Box::new(move || rules.clone())).unwrap()
+        ClassifierService::new(repo.clone(), cfg, Box::new(move || rules.clone()), Box::new(ClassifierTuning::default)).unwrap()
     }
 
     fn queued(repo: &FakeRepo) -> String {
@@ -617,4 +628,19 @@ mod tests {
     }
 
     const GOOD_FALSE_ALARM: &str = r#"{"model":"d1","answers":{"class":{"type":"choice","choice":"false_alarm","probabilities":{"person":0.05,"vehicle":0.02,"false_alarm":0.93},"confidence":0.8}}}"#;
+
+    #[test]
+    fn dashboard_tuning_overrides_the_environment_live() {
+        let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
+        queued(&repo);
+        let tuning = Arc::new(Mutex::new(ClassifierTuning { rules_enabled: Some(false), ..Default::default() }));
+        let t2 = tuning.clone();
+        let mut svc = ClassifierService::new(repo.clone(), cfg(&s.url), Box::new(|| vec![rule("weapon", 0.7)]), Box::new(move || t2.lock().unwrap().clone())).unwrap();
+        svc.run_once(Instant::now()).unwrap();
+        assert_eq!(s.hits(), 1, "rules switched off from the dashboard: only the class question");
+        queued(&repo);
+        *tuning.lock().unwrap() = ClassifierTuning::default();
+        svc.run_once(Instant::now()).unwrap();
+        assert_eq!(s.hits(), 3, "switched back on: class + the weapon question");
+    }
 }
