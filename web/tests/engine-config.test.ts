@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN, checkEffective, compact, effective, mergeConfig, overrides, parseConfig, quadArea } from "@/lib/engine-config";
 import { formatSpeed } from "@/lib/format";
-import { normaliseRule, ruleInput, ruleKey, ruleUpdate } from "@/lib/schemas";
+import { categoryLabel, categoryPatch, normaliseRule, ruleInput, ruleKey, ruleUpdate } from "@/lib/schemas";
 
 describe("parseConfig ranges (docs/ENGINE_CONFIG.md)", () => {
   it.each([
@@ -122,5 +122,52 @@ describe("behaviour rule input", () => {
     const v = normaliseRule(ruleUpdate.parse({ ...base, kind: "indication", config: { indication_kind: "moving", min_burst_ms: 2000 } }));
     expect(v.question).toBeNull();
     expect(normaliseRule(ruleUpdate.parse(base)).config).toEqual({});
+  });
+});
+
+describe("events.new_track_gap_s", () => {
+  it.each([0, 5, 300])("accepts %s", (v) => expect(parseConfig({ events: { new_track_gap_s: v } }).ok).toBe(true));
+  it.each([-1, 301])("rejects %s", (v) => expect(parseConfig({ events: { new_track_gap_s: v } }).ok).toBe(false));
+  it("is per camera and inherits like the others", () => {
+    expect(mergeConfig({ events: { new_track_gap_s: 8 } }, {}).events?.new_track_gap_s).toBe(8);
+    expect(mergeConfig({ events: { new_track_gap_s: 8 } }, { events: { new_track_gap_s: 0 } }).events?.new_track_gap_s).toBe(0);
+    expect(effective("events", "new_track_gap_s", undefined, undefined)).toEqual({ value: 0, from: "builtin" });
+    expect(parseConfig({ events: { other: 1 } }).ok).toBe(false);
+  });
+});
+
+describe("classifier section is global only", () => {
+  const ok = { classifier: { rules_enabled: false, rule_frames: 3, rule_max_queue: 50, batch: true } };
+  it("is accepted in the defaults", () => expect(parseConfig(ok, "defaults")).toEqual({ ok: true, config: ok }));
+  it("is rejected in a camera's config, whatever the scope default", () => {
+    const r = parseConfig(ok);
+    expect(r.ok).toBe(false);
+    expect(parseConfig(ok, "camera").ok).toBe(false);
+    expect(parseConfig({ classifier: { batch: false } }, "camera").ok).toBe(false);
+  });
+  it("a camera config without it, or with it null / empty, is fine", () => {
+    expect(parseConfig({ classifier: null, tracker: { min_hits: 3 } }, "camera").ok).toBe(true);
+    expect(parseConfig({ classifier: {} }, "camera").ok).toBe(true);
+  });
+  it.each([{ rule_frames: 0 }, { rule_frames: 7 }, { rule_max_queue: -1 }, { rule_max_queue: 201 }, { rule_frames: 1.5 }, { batch: "yes" }, { mode: 1 }])("rejects %j in the defaults", (c) =>
+    expect(parseConfig({ classifier: c }, "defaults").ok).toBe(false));
+  it.each([{ rule_frames: 1 }, { rule_frames: 6 }, { rule_max_queue: 0 }, { rule_max_queue: 200 }])("accepts the boundary %j", (c) =>
+    expect(parseConfig({ classifier: c }, "defaults").ok).toBe(true));
+  it("null leaves inherit the environment fallback and are not stored", () =>
+    expect(parseConfig({ classifier: { rule_frames: null, batch: true } }, "defaults")).toEqual({ ok: true, config: { classifier: { batch: true } } }));
+});
+
+describe("category patch", () => {
+  const full = { title: "Person", severity: "HIGH", opens_incident: true, enabled: true, cooldown_s: 30, burst_s: 6, burst_frames: 4 };
+  it("accepts a full update and the boundaries", () => {
+    expect(categoryPatch.safeParse(full).success).toBe(true);
+    expect(categoryPatch.safeParse({ cooldown_s: 0, burst_s: 0, burst_frames: 1 }).success).toBe(true);
+    expect(categoryPatch.safeParse({ cooldown_s: 86400, burst_s: 60, burst_frames: 12, title: "x".repeat(60) }).success).toBe(true);
+  });
+  it.each([{ title: "" }, { title: "x".repeat(61) }, { severity: "URGENT" }, { cooldown_s: -1 }, { cooldown_s: 86401 }, { burst_s: 61 }, { burst_frames: 0 }, { burst_frames: 13 }, { burst_s: 1.5 }, { label: "car" }, {}])(
+    "rejects %j", (v) => expect(categoryPatch.safeParse(v).success).toBe(false));
+  it("labels are lowercase COCO-style names, spaces allowed", () => {
+    expect(categoryLabel.safeParse("traffic light").success).toBe(true);
+    for (const bad of ["", "Car", "../x", "a;drop"]) expect(categoryLabel.safeParse(bad).success).toBe(false);
   });
 });

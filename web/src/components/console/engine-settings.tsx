@@ -13,7 +13,7 @@ import { api } from "@/hooks/use-api";
 import { BUILTIN, SEVERITIES, checkEffective, compact, effective, mergeConfig, parseConfig, type EngineConfig } from "@/lib/engine-config";
 import type { SourceRow } from "@/lib/types";
 
-type Group = "detector" | "tracker" | "calibration";
+type Group = "detector" | "tracker" | "events" | "calibration" | "classifier";
 type NumField = { group: Group; key: string; label: string; hint: string; min: number; max: number; step: number };
 
 const NUM_FIELDS: NumField[] = [
@@ -23,6 +23,9 @@ const NUM_FIELDS: NumField[] = [
   { group: "tracker", key: "iou_threshold", label: "Track match overlap (IoU)", hint: "Minimum overlap to keep the same track id.", min: 0.05, max: 0.9, step: 0.05 },
   { group: "tracker", key: "max_age", label: "Track max age (frames)", hint: "Analysed frames a track survives without a match.", min: 0, max: 60, step: 1 },
   { group: "tracker", key: "min_hits", label: "Frames before an event", hint: "A track must be seen this many times; drops one-frame flicker.", min: 1, max: 10, step: 1 },
+  { group: "events", key: "new_track_gap_s", label: "New-track gap (s)", hint: "0 = off. A track that never produced an event may open one this many seconds after the last event of its label, even during the category cooldown. 5-10 s reports a second person who arrives soon after the first, at the price of more events when the tracker re-ids the same person.", min: 0, max: 300, step: 1 },
+  { group: "classifier", key: "rule_frames", label: "Snapshots the rules look at", hint: "Behaviour rules look at the first N snapshots of the burst; the highest probability wins.", min: 1, max: 6, step: 1 },
+  { group: "classifier", key: "rule_max_queue", label: "Skip rules above this queue", hint: "Rules are skipped while more events than this wait for the classifier.", min: 0, max: 200, step: 1 },
   { group: "calibration", key: "speed_limit_kmh", label: "Speed limit (km/h)", hint: "Faster tracks are flagged “Over speed limit” for review.", min: 5, max: 300, step: 5 },
 ];
 
@@ -59,9 +62,9 @@ export function EngineConfigForm({ scope, draft, setDraft, defaults, source, onE
 
   return (
     <div className="space-y-5">
-      {(["detector", "tracker"] as const).map((g) => (
+      {(["detector", "tracker", "events"] as const).map((g) => (
         <section key={g}>
-          <h3 className="caps border-b border-border pb-2">{g === "detector" ? "Detector" : "Tracker"}</h3>
+          <h3 className="caps border-b border-border pb-2">{g === "detector" ? "Detector" : g === "tracker" ? "Tracker" : "Events"}</h3>
           {NUM_FIELDS.filter((f) => f.group === g).map((f) => {
             const i = inh(f.group, f.key), v = cur(f.group, f.key);
             return (
@@ -104,6 +107,30 @@ export function EngineConfigForm({ scope, draft, setDraft, defaults, source, onE
         )}
         {scope === "defaults" && <p className="py-3 text-xs text-text-2">Lines and road corners belong to one camera: set them from that camera’s engine settings.</p>}
       </section>
+
+      {scope === "defaults" && (
+        <section>
+          <h3 className="caps border-b border-border pb-2">Classifier <StatusChip className="ml-2 align-middle">GLOBAL</StatusChip></h3>
+          <p className="py-2 text-xs text-text-2">One classifier loop serves every camera, so these cannot be set per camera. Empty uses the CLASSIFIER_* environment variables. Applies within 30 s.</p>
+          {(() => { const i = inh("classifier", "rules_enabled"), v = cur("classifier", "rules_enabled"); return (
+            <Row label="Behaviour rules" hint="Off: only the person / vehicle / false_alarm class is asked, no behaviour rules." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("classifier", "rules_enabled", null)}>
+              <Switch aria-label="Behaviour rules" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? true} onCheckedChange={(c) => put("classifier", "rules_enabled", c)} />
+            </Row>); })()}
+          {NUM_FIELDS.filter((f) => f.group === "classifier").map((f) => {
+            const i = inh(f.group, f.key), v = cur(f.group, f.key);
+            return (
+              <Row key={f.key} label={f.label} hint={f.hint} from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put(f.group, f.key, null)}>
+                <Input aria-label={f.label} type="number" min={f.min} max={f.max} step={f.step} value={(v as number | null | undefined) ?? ""} placeholder={show(i.value)}
+                  onChange={(e) => put(f.group, f.key, e.target.value === "" ? null : Number(e.target.value))} className="h-8 border-border-strong bg-background font-mono" />
+              </Row>
+            );
+          })}
+          {(() => { const i = inh("classifier", "batch"), v = cur("classifier", "batch"); return (
+            <Row label="Batch rule questions" hint="On: all rule questions in one request (faster). Ollama d1 on CPU crashes with 2 or more questions in one request: leave it off unless the classifier is a GPU server you have tested." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("classifier", "batch", null)}>
+              <Switch aria-label="Batch rule questions" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? false} onCheckedChange={(c) => put("classifier", "batch", c)} />
+            </Row>); })()}
+        </section>
+      )}
     </div>
   );
 }
@@ -135,7 +162,7 @@ export function EngineSettingsDialog({ open, onOpenChange, source, defaults, onS
   return (
     <>
       <Dialog open={open && !geom} onOpenChange={onOpenChange}>
-        <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto rounded-lg border-border bg-surface-2">
+        <DialogContent className="max-h-[92vh] sm:max-w-2xl overflow-y-auto rounded-lg border-border bg-surface-2">
           <DialogHeader>
             <DialogTitle>Engine settings · {source.code}</DialogTitle>
             <DialogDescription>Each field inherits the defaults until you override it. Reset a field to inherit again.</DialogDescription>
@@ -159,7 +186,7 @@ export function EngineDefaultsDialog({ open, onOpenChange, defaults, onSaved }: 
   const [draft, setDraft] = useState<EngineConfig>(() => compact(defaults));
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const problems = useMemo(() => { const p = parseConfig(draft); return p.ok ? checkEffective(p.config) : p.errors; }, [draft]);
+  const problems = useMemo(() => { const p = parseConfig(draft, "defaults"); return p.ok ? checkEffective(p.config) : p.errors; }, [draft]);
   async function save() {
     setBusy(true); setErr(null);
     try {
@@ -170,7 +197,7 @@ export function EngineDefaultsDialog({ open, onOpenChange, defaults, onSaved }: 
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto rounded-lg border-border bg-surface-2">
+      <DialogContent className="max-h-[92vh] sm:max-w-2xl overflow-y-auto rounded-lg border-border bg-surface-2">
         <DialogHeader>
           <DialogTitle>Engine defaults <StatusChip className="ml-2 align-middle">ALL CAMERAS</StatusChip></DialogTitle>
           <DialogDescription>Applies to every camera that does not override the field. An empty field uses the worker’s built-in value.</DialogDescription>

@@ -9,7 +9,7 @@ export const PUT = route<{ id: string }>(async (req, { params }) => {
   const u = await requireSession(["admin"]);
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new HttpError(400, "Bad id");
-  const parsed = parseConfig(await req.json().catch(() => null));
+  const parsed = parseConfig(await req.json().catch(() => null), "camera");
   if (!parsed.ok) throw new HttpError(400, parsed.errors.join("; "));
   // the camera runs with defaults + its overrides, so that is what has to be coherent (e.g. a line needs a measured distance)
   const errs = checkEffective(mergeConfig(await getEngineDefaults(), parsed.config));

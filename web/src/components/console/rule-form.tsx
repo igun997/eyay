@@ -59,7 +59,7 @@ export function RuleDialog({ open, onOpenChange, categories, rule, nextPosition,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-xl overflow-y-auto rounded-lg border-border bg-surface-2">
+      <DialogContent className="max-h-[92vh] sm:max-w-xl overflow-y-auto rounded-lg border-border bg-surface-2">
         <form onSubmit={save} className="space-y-4" noValidate>
           <DialogHeader>
             <DialogTitle>{rule ? `Edit ${rule.title}` : "Add behaviour rule"}</DialogTitle>

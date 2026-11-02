@@ -30,13 +30,21 @@ export const calibrationSchema = z
   })
   .strict();
 
+export const eventsSchema = z.object({ new_track_gap_s: num(0, 300) }).strict();
+/** Global only (one classifier loop serves every camera): accepted in the defaults, rejected in a camera's config. */
+export const classifierSchema = z
+  .object({ rules_enabled: z.boolean().nullish(), rule_frames: int(1, 6), rule_max_queue: int(0, 200), batch: z.boolean().nullish() })
+  .strict();
+
 export const engineConfigSchema = z
-  .object({ detector: detectorSchema.nullish(), tracker: trackerSchema.nullish(), calibration: calibrationSchema.nullish() })
+  .object({ detector: detectorSchema.nullish(), tracker: trackerSchema.nullish(), events: eventsSchema.nullish(), calibration: calibrationSchema.nullish(), classifier: classifierSchema.nullish() })
   .strict();
 
 export type EngineConfig = {
   detector?: { nms_iou?: number | null; target_fps?: number | null; intra_threads?: number | null };
   tracker?: { iou_threshold?: number | null; max_age?: number | null; min_hits?: number | null };
+  events?: { new_track_gap_s?: number | null };
+  classifier?: { rules_enabled?: boolean | null; rule_frames?: number | null; rule_max_queue?: number | null; batch?: boolean | null };
   calibration?: {
     method?: (typeof METHODS)[number] | null; speed_limit_kmh?: number | null; speed_severity?: (typeof SEVERITIES)[number] | null;
     show_geometry?: boolean | null; line_axis?: "x" | "y" | null; line1?: number | null; line2?: number | null; distance_m?: number | null;
@@ -48,6 +56,9 @@ export type EngineConfig = {
 export const BUILTIN: Required<{ [G in keyof EngineConfig]: NonNullable<EngineConfig[G]> }> = {
   detector: { nms_iou: 0.45, target_fps: 5, intra_threads: 0 },
   tracker: { iou_threshold: 0.3, max_age: 10, min_hits: 2 },
+  events: { new_track_gap_s: 0 },
+  // CLASSIFIER_* environment variables are the worker's fallback when a key is unset
+  classifier: { rules_enabled: true, rule_frames: 1, rule_max_queue: 10, batch: false },
   calibration: { method: "none", speed_limit_kmh: 50, speed_severity: "HIGH", show_geometry: true, line_axis: "x", smoothing: 0.4 },
 };
 
@@ -110,11 +121,15 @@ export function quadArea(p: [number, number][]): number {
 
 export type ParseResult = { ok: true; config: EngineConfig } | { ok: false; errors: string[] };
 
-/** Strict parse of a config document: unknown keys and out-of-range values are rejected, null leaves dropped. */
-export function parseConfig(input: unknown): ParseResult {
+/**
+ * Strict parse of a config document: unknown keys and out-of-range values are rejected, null leaves dropped.
+ * `scope` "camera" (default) also rejects the global-only `classifier` section; "defaults" accepts it.
+ */
+export function parseConfig(input: unknown, scope: "camera" | "defaults" = "camera"): ParseResult {
   const r = engineConfigSchema.safeParse(input);
   if (!r.success) return { ok: false, errors: r.error.issues.map((i) => `${i.path.join(".") || "config"}: ${i.message}`) };
   const config = compact(r.data as EngineConfig);
+  if (scope === "camera" && config.classifier) return { ok: false, errors: ["classifier: global only, set it in the engine defaults (one classifier loop serves every camera)"] };
   const own = checkInternal(config);
   return own.length ? { ok: false, errors: own } : { ok: true, config };
 }

@@ -71,7 +71,7 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto rounded-lg border-border bg-surface-2">
+      <DialogContent className="max-h-[92vh] sm:max-w-4xl overflow-y-auto rounded-lg border-border bg-surface-2">
         <DialogHeader>
           <DialogTitle>Speed calibration · {source.code}</DialogTitle>
           <DialogDescription>Drag the lines (or the four corners) over the camera still, then enter what you measured on site. The worker applies it within about 5 seconds of saving.</DialogDescription>

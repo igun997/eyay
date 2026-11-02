@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { RuleDialog } from "@/components/console/rule-form";
+import { CategoryDialog } from "@/components/console/category-form";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { PageHeader, Panel } from "@/components/console/page-header";
 import { SeverityPill } from "@/components/console/severity-pill";
@@ -21,6 +22,7 @@ export default function RulesPage() {
   const [sel, setSel] = useState<string | null>(null);
   const [editing, setEditing] = useState<BehaviorRule | "new" | null>(null);
   const [removing, setRemoving] = useState<BehaviorRule | null>(null);
+  const [editingCat, setEditingCat] = useState<CategoryRow | null>(null);
   if (loading) return <LoadingList />;
   if (!data) return <ErrorState onRetry={() => refresh()} message={error?.message} />;
   const rows = data.categories;
@@ -30,9 +32,9 @@ export default function RulesPage() {
   const cur = rows.find((r) => r.label === sel) ?? rows[0];
   return (
     <>
-      <PageHeader title="Rules" badge={<StatusChip icon={Lock} className="h-6">{admin ? "CATEGORIES READ-ONLY" : "READ-ONLY"}</StatusChip>} subtitle={`${rows.length} categories · ${rows.filter((r) => r.enabled).length} enabled · rules only create events and incidents, never physical actions`} />
+      <PageHeader title="Rules" badge={admin ? undefined : <StatusChip icon={Lock} className="h-6">READ-ONLY</StatusChip>} subtitle={`${rows.length} categories · ${rows.filter((r) => r.enabled).length} enabled · rules only create events and incidents, never physical actions`} />
       <div className="grid gap-5 px-8 pb-10 xl:grid-cols-[1fr_400px]">
-        <Panel>
+        <Panel title="Categories" aside={admin ? "Click a row, then Edit" : undefined}>
           <table className="w-full text-sm">
             <thead><tr className="border-b border-border text-left"><th className="caps px-5 py-3 font-normal">Category</th><th className="caps py-3 font-normal">Severity</th><th className="caps py-3 font-normal">Incident</th><th className="caps py-3 pr-5 font-normal">State</th></tr></thead>
             <tbody>{rows.map((r) => (
@@ -54,6 +56,11 @@ export default function RulesPage() {
               <p className="grid grid-cols-[80px_1fr] text-sm"><span className="font-mono text-xs text-text-3">Incident</span>{cur.opens_incident ? "Opened immediately; repeats within 5 min are grouped" : "Not opened"}</p>
               <p className="grid grid-cols-[80px_1fr] text-sm"><span className="font-mono text-xs text-text-3">Cooldown</span>{cur.cooldown_s} s per camera</p>
               <p className="grid grid-cols-[80px_1fr] text-sm"><span className="font-mono text-xs text-text-3">Snapshots</span>{cur.burst_s > 0 ? `${cur.burst_frames} frames over up to ${cur.burst_s} s (stills, never video)` : "single snapshot"}</p></div>
+            <div className="space-y-1 px-5 pb-1 pt-4 text-xs text-text-2">
+              <p><span className="font-mono text-text-3">Cooldown</span> · one event per label per camera per cooldown.</p>
+              <p><span className="font-mono text-text-3">Burst</span> · takes N snapshots over S seconds; behaviour rules look at them.</p>
+            </div>
+            {admin && <div className="p-5"><Button variant="outline" onClick={() => setEditingCat(cur)}>Edit category</Button></div>}
             <p className="m-5 border-l-2 border-brand bg-surface-2 p-3 text-xs text-text-2"><span className="caps block">Events only</span>This rule cannot open doors, sound alarms or control machines.</p>
           </Panel>
         )}
@@ -75,6 +82,7 @@ export default function RulesPage() {
           </table>
         </Panel>
       </div>
+      {editingCat && <CategoryDialog key={editingCat.label} open onOpenChange={(o) => !o && setEditingCat(null)} category={editingCat} onSaved={() => revalidate("/api/categories")} />}
       {editing && <RuleDialog open onOpenChange={(o) => !o && setEditing(null)} categories={data.categories} rule={editing === "new" ? undefined : editing} nextPosition={Math.max(0, ...data.rules.map((r) => r.position)) + 1} onSaved={() => revalidate("/api/categories")} />}
       <ConfirmDialog open={!!removing} onOpenChange={(o) => !o && setRemoving(null)} title={`Delete ${removing?.title}?`} confirmLabel="Delete rule" variant="destructive"
         description="Events it already flagged keep their indicator. New events are no longer checked against it." onConfirm={async () => { await api(`/api/rules/${removing!.key}`, { method: "DELETE" }); toast.success("Rule deleted"); await revalidate("/api/categories"); }} />

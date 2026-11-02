@@ -87,6 +87,13 @@ export const getSource = async (id: string) =>
 
 export const listCategories = () => query<CategoryRow>("SELECT * FROM categories ORDER BY severity, label");
 
+export async function updateCategory(label: string, patch: Partial<Omit<CategoryRow, "label">>) {
+  const sets: string[] = [], p: unknown[] = [];
+  for (const [k, v] of Object.entries(patch)) { p.push(v); sets.push(`${k} = $${p.length}`); } // keys come from the validated schema, never from the client
+  p.push(label);
+  return (await query<CategoryRow>(`UPDATE categories SET ${sets.join(", ")} WHERE label = $${p.length} RETURNING *`, p))[0] ?? null;
+}
+
 export const listUsers = () => query<UserRow>("SELECT id,email,name,role,active,created_at FROM users ORDER BY created_at");
 
 export async function overview() {

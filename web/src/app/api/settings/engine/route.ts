@@ -14,7 +14,7 @@ export const GET = route(async () => {
 
 export const PUT = route(async (req) => {
   const u = await requireSession(["admin"]);
-  const parsed = parseConfig(await req.json().catch(() => null));
+  const parsed = parseConfig(await req.json().catch(() => null), "defaults");
   if (!parsed.ok) throw new HttpError(400, parsed.errors.join("; "));
   const errs = checkEffective(parsed.config);
   if (errs.length) throw new HttpError(400, errs.join("; "));

@@ -88,3 +88,19 @@ export const normaliseRule = <T extends z.infer<typeof ruleBase>>(v: T) => ({
   question: v.kind === "classifier" ? (v.question ?? null) : null,
   config: v.kind === "indication" ? v.config : {},
 });
+
+// ---- categories (docs/ENGINE_CONFIG.md "Categories") ------------------------------------------------------------------
+export const categoryLabel = z.string().regex(/^[a-z][a-z0-9 _-]{0,39}$/, "Unknown category label");
+export const categoryPatch = z
+  .object({
+    title: z.string().trim().min(1).max(60),
+    severity: z.enum(severities),
+    opens_incident: z.boolean(),
+    enabled: z.boolean(),
+    cooldown_s: z.number().int().min(0).max(86400),
+    burst_s: z.number().int().min(0).max(60),
+    burst_frames: z.number().int().min(1).max(12),
+  })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, "Nothing to update");
