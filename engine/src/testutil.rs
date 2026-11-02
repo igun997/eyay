@@ -7,8 +7,9 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use crate::automation::{AutomationRow, Connection, EventView, TestRequest};
 use crate::behavior::{EventState, Flag, Rule};
-use crate::classifier::{Classification, ClassifyJob};
+use crate::classifier::ClassifyJob;
 use crate::model::{BBox, Category, Snapshot, SourceInfo};
 use crate::repo::{NewEvent, Repository, Tx};
 
@@ -43,8 +44,6 @@ pub struct FEvent {
     pub speed_kmh: Option<f32>,
     pub pipeline: String,
     pub cls_label: Option<String>,
-    pub cls_confidence: Option<f32>,
-    pub cls_model: Option<String>,
     pub cls_error: Option<String>,
     pub jpeg: Option<Vec<u8>>,
     pub bbox: Option<BBox>,
@@ -61,7 +60,22 @@ pub struct FIncident {
 }
 
 #[derive(Default, Clone, Debug)]
+pub struct FRun {
+    pub id: i64,
+    pub automation_id: Option<String>,
+    pub connection_id: Option<String>,
+    pub event_id: Option<String>,
+    pub source_id: Option<String>,
+    pub mode: String,
+    pub status: String,
+    pub detail: Value,
+}
+
+#[derive(Default, Clone, Debug)]
 pub struct FakeState {
+    pub runs: Vec<FRun>,
+    pub automations: Vec<AutomationRow>,
+    pub connections: Vec<Connection>,
     pub incidents: BTreeMap<String, FIncident>,
     pub events: BTreeMap<String, FEvent>,
     /// (event_id, idx, offset_ms)
@@ -99,6 +113,21 @@ impl FakeRepo {
         (id, inc)
     }
 
+    pub fn set_automations(&self, rows: Vec<AutomationRow>, conns: Vec<Connection>) {
+        let mut s = self.lock();
+        s.automations = rows;
+        s.connections = conns;
+    }
+
+    /// Queue a preview / test send (automation) or a connection check, as the web app would.
+    pub fn queue_test(&self, automation: Option<&str>, connection: Option<&str>, mode: &str) {
+        let mut s = self.lock();
+        let id = s.runs.len() as i64 + 1;
+        s.runs.push(FRun {
+            id, automation_id: automation.map(Into::into), connection_id: connection.map(Into::into), mode: mode.into(), status: "queued".into(), ..Default::default()
+        });
+    }
+
     /// A queued event with a snapshot, for the classifier tests.
     pub fn add_queued(&self, jpeg: Option<Vec<u8>>, bbox: Option<BBox>, label: &str) -> String {
         let mut s = self.lock();
@@ -128,7 +157,7 @@ impl Tx for FakeTx<'_> {
         let id = format!("evt-{:04}-bbbb", self.0.next);
         self.0.events.insert(id.clone(), FEvent {
             label: e.label.into(), severity: e.severity.into(), incident_id: e.incident_id.map(Into::into), source_id: e.source_id.into(),
-            track_id: e.track_id, pipeline: "queued".into(), bbox: Some(e.bbox), ..Default::default()
+            track_id: e.track_id, pipeline: e.pipeline.into(), cls_label: Some(e.cls_label.into()), bbox: Some(e.bbox), ..Default::default()
         });
         Ok(id)
     }
@@ -226,17 +255,11 @@ impl Repository for FakeRepo {
         Ok(Some(ClassifyJob { event_id: id.clone(), bbox: e.bbox, jpeg: e.jpeg.clone(), label: e.label.clone(), snapshots: shots, queue_depth: depth }))
     }
 
-    fn store_classification(&self, event_id: &str, r: &Classification, flags: &[Flag], error: Option<&str>) -> Result<()> {
-        self.transaction(&mut |tx| {
-            // reuse the production code path for flags
-            crate::behavior::apply_flags(tx, event_id, flags, Utc::now())
-        })?;
+    fn store_rule_result(&self, event_id: &str, flags: &[Flag], error: Option<&str>, _ms: u64) -> Result<()> {
+        self.transaction(&mut |tx| crate::behavior::apply_flags(tx, event_id, flags, Utc::now()))?; // the production path for flags
         let mut s = self.lock();
         let e = s.events.get_mut(event_id).expect("event");
         e.pipeline = "ready".into();
-        e.cls_label = Some(r.label.clone());
-        e.cls_confidence = Some(r.confidence);
-        e.cls_model = Some(r.model.clone());
         e.cls_error = error.map(Into::into);
         Ok(())
     }
@@ -264,6 +287,61 @@ impl Repository for FakeRepo {
 
     fn classifier_stats(&self) -> Result<(i64, i64)> {
         Ok((0, 0))
+    }
+
+    fn list_automations(&self) -> Result<Vec<AutomationRow>> {
+        Ok(self.lock().automations.clone())
+    }
+
+    fn list_connections(&self) -> Result<Vec<Connection>> {
+        Ok(self.lock().connections.clone())
+    }
+
+    fn automation_event(&self, event_id: &str) -> Result<Option<EventView>> {
+        let s = self.lock();
+        Ok(s.events.get(event_id).map(|e| EventView {
+            id: event_id.into(), code: format!("evt_{}", &event_id[4..8.min(event_id.len())]), label: e.label.clone(), severity: e.severity.clone(),
+            title: format!("{} detected at Dock 2", e.label), detected_at: Utc::now(), source_id: e.source_id.clone(), camera_code: "CAM-01".into(),
+            camera_name: "Dock 2".into(), speed_kmh: e.speed_kmh, suspicious: e.suspicious, cls_label: e.cls_label.clone(),
+            indicators: e.flags.iter().filter(|f| f["triggered"] == json!(true)).map(|f| (f["rule"].as_str().unwrap_or("").to_string(), f["title"].as_str().unwrap_or("").to_string())).collect(),
+            incident_code: e.incident_id.as_ref().map(|i| s.incidents[i].code.clone()),
+        }))
+    }
+
+    fn try_start_run(&self, automation_id: &str, event_id: &str, source_id: &str, mode: &str) -> Result<Option<i64>> {
+        let mut s = self.lock();
+        if s.runs.iter().any(|r| r.automation_id.as_deref() == Some(automation_id) && r.event_id.as_deref() == Some(event_id)) {
+            return Ok(None);
+        }
+        let id = s.runs.len() as i64 + 1;
+        s.runs.push(FRun {
+            id, automation_id: Some(automation_id.into()), event_id: Some(event_id.into()), source_id: Some(source_id.into()), mode: mode.into(), status: "running".into(),
+            ..Default::default()
+        });
+        Ok(Some(id))
+    }
+
+    fn recent_run_counts(&self, automation_id: &str, source_id: &str, _cooldown_s: i64) -> Result<(i64, i64)> {
+        let s = self.lock();
+        let real = |r: &&FRun| r.automation_id.as_deref() == Some(automation_id) && r.event_id.is_some() && ["sent", "simulated", "failed"].contains(&r.status.as_str());
+        let all = s.runs.iter().filter(real).count() as i64;
+        let cam = s.runs.iter().filter(real).filter(|r| r.source_id.as_deref() == Some(source_id)).count() as i64;
+        Ok((cam, all))
+    }
+
+    fn finish_run(&self, run_id: i64, status: &str, detail: &Value) -> Result<()> {
+        let mut s = self.lock();
+        let r = s.runs.iter_mut().find(|r| r.id == run_id).expect("run");
+        r.status = status.into();
+        r.detail = detail.clone();
+        Ok(())
+    }
+
+    fn claim_queued_test(&self) -> Result<Option<TestRequest>> {
+        let mut s = self.lock();
+        let Some(r) = s.runs.iter_mut().find(|r| r.status == "queued") else { return Ok(None) };
+        r.status = "running".into();
+        Ok(Some(TestRequest { run_id: r.id, automation_id: r.automation_id.clone(), connection_id: r.connection_id.clone(), mode: r.mode.clone() }))
     }
 }
 

@@ -10,8 +10,9 @@ use postgres::{Client, NoTls, Transaction};
 use serde_json::Value;
 use tracing::info;
 
+use crate::automation::{AutomationRow, Connection, EventView, TestRequest};
 use crate::behavior::{EventState, Flag, Rule, apply_flags};
-use crate::classifier::{Classification, ClassifyJob};
+use crate::classifier::ClassifyJob;
 use crate::model::{BBox, Category, Snapshot, SourceInfo};
 
 pub struct NewEvent<'a> {
@@ -24,6 +25,10 @@ pub struct NewEvent<'a> {
     pub bbox: BBox,
     pub title: &'a str,
     pub detected_at: DateTime<Utc>,
+    /// the camera AI's own classification: person | vehicle | other
+    pub cls_label: &'a str,
+    /// 'ready' normally; 'queued' when the optional second AI check has behaviour questions to answer for this event
+    pub pipeline: &'a str,
 }
 
 pub trait Tx {
@@ -56,15 +61,27 @@ pub trait Repository: Send + Sync {
     ) -> Result<()>;
     fn heartbeat(&self, worker_id: &str, sources: i32, model: &str, classifier: Option<&str>) -> Result<()>;
 
-    // classifier (see classifier.rs); cls_at is the claim time while 'classifying', then the finish time
+    // second AI check (see classifier.rs); cls_at is the claim time while 'classifying', then the finish time
     fn claim_queued_event(&self, exclude: &[String], frames: usize) -> Result<Option<ClassifyJob>>;
-    /// Store the class answer and merge behaviour flags in ONE transaction (row-locked).
-    fn store_classification(&self, event_id: &str, result: &Classification, flags: &[Flag], error: Option<&str>) -> Result<()>;
+    /// Mark the event 'ready' and merge the behaviour flags it produced in ONE transaction (row-locked).
+    fn store_rule_result(&self, event_id: &str, flags: &[Flag], error: Option<&str>, ms: u64) -> Result<()>;
     fn store_classification_failure(&self, event_id: &str, error: &str, requeue: bool) -> Result<()>;
     fn skip_all_queued(&self) -> Result<u64>;
     fn recover_stuck_classifying(&self, older_than_s: f64) -> Result<u64>;
     /// -> (queued, failed in the last 10 minutes)
     fn classifier_stats(&self) -> Result<(i64, i64)>;
+
+    // alerts and automations (see automation.rs)
+    fn list_automations(&self) -> Result<Vec<AutomationRow>>;
+    fn list_connections(&self) -> Result<Vec<Connection>>;
+    fn automation_event(&self, event_id: &str) -> Result<Option<EventView>>;
+    /// Claim (automation, event): Some(run id) the first time, None when this event already fired this automation.
+    fn try_start_run(&self, automation_id: &str, event_id: &str, source_id: &str, mode: &str) -> Result<Option<i64>>;
+    /// -> (runs of this automation on this camera within `cooldown_s`, runs of this automation in the last hour); real runs only
+    fn recent_run_counts(&self, automation_id: &str, source_id: &str, cooldown_s: i64) -> Result<(i64, i64)>;
+    fn finish_run(&self, run_id: i64, status: &str, detail: &Value) -> Result<()>;
+    /// Next preview / test send / connection check queued by the web app (marks it 'running').
+    fn claim_queued_test(&self) -> Result<Option<TestRequest>>;
 }
 
 // ---- PostgreSQL ---------------------------------------------------------------------------------------------------
@@ -93,10 +110,10 @@ impl PgRepository {
 
     fn schema_ready(&self) -> Result<bool> {
         let mut c = Client::connect(&self.dsn, NoTls).context("connecting")?;
-        // schema = migrations 001-005 (sources.config, engine_settings, events.pipeline/burst_done/cls_flags/speed_kmh, behavior_rules), applied by the web app
+        // schema = migrations 001-007 (sources.config, engine_settings, events.pipeline/burst_done/cls_flags/speed_kmh, behavior_rules), applied by the web app
         let row = c.query_one(
             "SELECT to_regclass('public.sources') IS NOT NULL AND to_regclass('public.behavior_rules') IS NOT NULL AND \
-             to_regclass('public.engine_settings') IS NOT NULL AND \
+             to_regclass('public.engine_settings') IS NOT NULL AND to_regclass('public.automation_runs') IS NOT NULL AND \
              (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='events' \
               AND column_name IN ('pipeline','burst_done','cls_flags','speed_kmh')) = 4 AND \
              EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sources' AND column_name='config')",
@@ -145,10 +162,12 @@ impl Tx for PgTx<'_, '_> {
 
     fn insert_event(&mut self, e: &NewEvent) -> Result<String> {
         let bbox = serde_json::to_value(e.bbox)?;
+        let probs = serde_json::json!({ e.cls_label: e.confidence });
         let r = self.0.query_one(
-            "INSERT INTO events (source_id, incident_id, label, confidence, severity, track_id, bbox, title, detected_at) \
-             VALUES ($1::text::uuid, $2::text::uuid, $3,$4,$5,$6,$7,$8,$9) RETURNING id::text",
-            &[&e.source_id, &e.incident_id, &e.label, &e.confidence, &e.severity, &e.track_id, &bbox, &e.title, &e.detected_at],
+            "INSERT INTO events (source_id, incident_id, label, confidence, severity, track_id, bbox, title, detected_at, \
+             pipeline, cls_label, cls_confidence, cls_probs, cls_model, cls_at) \
+             VALUES ($1::text::uuid, $2::text::uuid, $3,$4,$5,$6,$7,$8,$9, $10,$11,$4,$12,'detector', now()) RETURNING id::text",
+            &[&e.source_id, &e.incident_id, &e.label, &e.confidence, &e.severity, &e.track_id, &bbox, &e.title, &e.detected_at, &e.pipeline, &e.cls_label, &probs],
         )?;
         Ok(r.get(0))
     }
@@ -340,16 +359,14 @@ impl Repository for PgRepository {
         })
     }
 
-    fn store_classification(&self, event_id: &str, result: &Classification, flags: &[Flag], error: Option<&str>) -> Result<()> {
-        let probs = serde_json::to_value(&result.probs)?;
+    fn store_rule_result(&self, event_id: &str, flags: &[Flag], error: Option<&str>, ms: u64) -> Result<()> {
         let error: Option<String> = error.map(|e| e.chars().take(300).collect());
-        let ms = result.ms as i32;
+        let ms = ms as i32;
         self.with(|c| {
             let mut t = c.transaction()?;
             t.execute(
-                "UPDATE events SET pipeline='ready', cls_label=$1, cls_confidence=$2, cls_probs=$3, cls_model=$4, cls_ms=$5, cls_error=$6, \
-                 cls_at=now() WHERE id=$7::text::uuid",
-                &[&result.label, &result.confidence, &probs, &result.model, &ms, &error, &event_id],
+                "UPDATE events SET pipeline='ready', cls_ms=$1, cls_error=$2, cls_at=now() WHERE id=$3::text::uuid",
+                &[&ms, &error, &event_id],
             )?;
             if !flags.is_empty() {
                 apply_flags(&mut PgTx(&mut t), event_id, flags, Utc::now())?;
@@ -380,6 +397,100 @@ impl Repository for PgRepository {
                 "UPDATE events SET pipeline='queued' WHERE pipeline='classifying' AND (cls_at IS NULL OR cls_at < now() - make_interval(secs => $1))",
                 &[&older_than_s],
             )?)
+        })
+    }
+
+    fn list_automations(&self) -> Result<Vec<AutomationRow>> {
+        self.with(|c| {
+            let rows = c.query("SELECT id::text, name, enabled, mode, conditions, actions, cooldown_s, max_per_hour FROM automations ORDER BY position, created_at", &[])?;
+            Ok(rows
+                .iter()
+                .map(|r| AutomationRow {
+                    id: r.get(0), name: r.get(1), enabled: r.get(2), mode: r.get(3), conditions: r.get(4), actions: r.get(5), cooldown_s: r.get(6),
+                    max_per_hour: r.get(7),
+                })
+                .collect())
+        })
+    }
+
+    fn list_connections(&self) -> Result<Vec<Connection>> {
+        self.with(|c| {
+            let rows = c.query("SELECT id::text, name, kind, config, enabled FROM connections", &[])?;
+            Ok(rows.iter().map(|r| Connection { id: r.get(0), name: r.get(1), kind: r.get(2), config: r.get(3), enabled: r.get(4) }).collect())
+        })
+    }
+
+    fn automation_event(&self, event_id: &str) -> Result<Option<EventView>> {
+        self.with(|c| {
+            let row = c.query_opt(
+                "SELECT e.id::text, e.code, e.label, e.severity, e.title, e.detected_at, e.source_id::text, s.code, s.name, e.speed_kmh, e.suspicious, \
+                 e.cls_label, e.cls_flags, i.code FROM events e JOIN sources s ON s.id=e.source_id LEFT JOIN incidents i ON i.id=e.incident_id \
+                 WHERE e.id=$1::text::uuid",
+                &[&event_id],
+            )?;
+            Ok(row.map(|r| {
+                let flags: Value = r.get(12);
+                let indicators = flags
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|f| f["triggered"] == Value::Bool(true))
+                    .filter_map(|f| Some((f["rule"].as_str()?.to_string(), f["title"].as_str().unwrap_or_default().to_string())))
+                    .collect();
+                EventView {
+                    id: r.get(0), code: r.get(1), label: r.get(2), severity: r.get(3), title: r.get(4), detected_at: r.get(5), source_id: r.get(6),
+                    camera_code: r.get(7), camera_name: r.get(8), speed_kmh: r.get(9), suspicious: r.get(10), cls_label: r.get(11), indicators,
+                    incident_code: r.get(13),
+                }
+            }))
+        })
+    }
+
+    fn try_start_run(&self, automation_id: &str, event_id: &str, source_id: &str, mode: &str) -> Result<Option<i64>> {
+        self.with(|c| {
+            let row = c.query_opt(
+                "INSERT INTO automation_runs (automation_id, event_id, source_id, mode, status) \
+                 VALUES ($1::text::uuid, $2::text::uuid, $3::text::uuid, $4, 'running') \
+                 ON CONFLICT (automation_id, event_id) WHERE event_id IS NOT NULL DO NOTHING RETURNING id",
+                &[&automation_id, &event_id, &source_id, &mode],
+            )?;
+            Ok(row.map(|r| r.get(0)))
+        })
+    }
+
+    fn recent_run_counts(&self, automation_id: &str, source_id: &str, cooldown_s: i64) -> Result<(i64, i64)> {
+        self.with(|c| {
+            let secs = cooldown_s as f64;
+            let r = c.query_one(
+                "SELECT count(*) FILTER (WHERE source_id=$2::text::uuid AND at > now() - make_interval(secs => $3)), \
+                 count(*) FILTER (WHERE at > now() - interval '1 hour') FROM automation_runs \
+                 WHERE automation_id=$1::text::uuid AND event_id IS NOT NULL AND status IN ('sent','simulated','failed')",
+                &[&automation_id, &source_id, &secs],
+            )?;
+            Ok((r.get(0), r.get(1)))
+        })
+    }
+
+    fn finish_run(&self, run_id: i64, status: &str, detail: &Value) -> Result<()> {
+        self.with(|c| {
+            c.execute("UPDATE automation_runs SET status=$2, detail=$3, finished_at=now() WHERE id=$1", &[&run_id, &status, detail])?;
+            Ok(())
+        })
+    }
+
+    fn claim_queued_test(&self) -> Result<Option<TestRequest>> {
+        self.with(|c| {
+            let mut t = c.transaction()?;
+            let Some(r) = t.query_opt(
+                "SELECT id, automation_id::text, connection_id::text, mode FROM automation_runs WHERE status='queued' ORDER BY at FOR UPDATE SKIP LOCKED LIMIT 1",
+                &[],
+            )? else {
+                return Ok(None);
+            };
+            let id: i64 = r.get(0);
+            t.execute("UPDATE automation_runs SET status='running' WHERE id=$1", &[&id])?;
+            t.commit()?;
+            Ok(Some(TestRequest { run_id: id, automation_id: r.get(1), connection_id: r.get(2), mode: r.get(3) }))
         })
     }
 
@@ -441,6 +552,7 @@ mod pg_tests {
         NewEvent {
             source_id: source, incident_id: incident, label: "person", confidence: 0.9, severity: "HIGH", track_id: 1,
             bbox: BBox { x: 0.1, y: 0.1, w: 0.2, h: 0.4 }, title: "Person detected at Test", detected_at: Utc::now(),
+            cls_label: "person", pipeline: "queued",
         }
     }
 
@@ -494,17 +606,17 @@ mod pg_tests {
         assert_eq!(job.jpeg.as_deref(), Some(&[0xff, 0xd8, 9][..]));
         assert!(r.claim_queued_event(&others, 1).unwrap().is_none(), "claimed events are not handed out twice");
 
-        let result = Classification { label: "person".into(), confidence: 0.9, probs: [("person".to_string(), 0.9)].into(), model: "d1".into(), ms: 12 };
         let flag = Flag { rule: "weapon".into(), title: "Weapon".into(), prob: Some(0.8), threshold: 0.7, severity: "CRITICAL".into(), triggered: true, opens_incident: true, detail: Some("x".into()) };
-        r.store_classification(&mine, &result, &[flag], None).unwrap();
+        r.store_rule_result(&mine, &[flag], None, 12).unwrap();
         let row = r
-            .with(|c| Ok(c.query_one("SELECT pipeline, suspicious, severity, incident_id IS NOT NULL, cls_flags FROM events WHERE id=$1::text::uuid", &[&mine])?))
+            .with(|c| Ok(c.query_one("SELECT pipeline, suspicious, severity, incident_id IS NOT NULL, cls_flags, cls_label, cls_model FROM events WHERE id=$1::text::uuid", &[&mine])?))
             .unwrap();
         assert_eq!(row.get::<_, String>(0), "ready");
         assert!(row.get::<_, bool>(1));
         assert_eq!(row.get::<_, String>(2), "CRITICAL");
         assert!(row.get::<_, bool>(3), "the indicator opened an incident for an event that had none");
         assert_eq!(row.get::<_, Value>(4)[0]["rule"], json!("weapon"));
+        assert_eq!((row.get::<_, String>(5), row.get::<_, String>(6)), ("person".to_string(), "detector".to_string()), "the camera AI classified it when the event was written");
         cleanup(&r, &src);
     }
 
@@ -520,6 +632,46 @@ mod pg_tests {
         assert!(r.list_categories().unwrap().contains_key("person"));
         assert!(!r.list_behavior_rules().unwrap().is_empty());
         r.heartbeat("test-worker", 1, "m", Some("d1 @ x")).unwrap();
+        cleanup(&r, &src);
+    }
+
+    #[test]
+    fn automation_runs_fire_once_per_event_and_tests_are_claimed_from_the_queue() {
+        let Some(r) = repo() else { return };
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        r.wait_ready(&std::sync::atomic::AtomicBool::new(false));
+        let src = seed_source(&r);
+        let mut ev = String::new();
+        r.transaction(&mut |tx| {
+            ev = tx.insert_event(&new_event(&src, None))?;
+            Ok(())
+        })
+        .unwrap();
+        let auto: String = r
+            .with(|c| Ok(c.query_one("INSERT INTO automations (name, conditions, actions) VALUES ('t', '[]', '[]') RETURNING id::text", &[])?.get(0)))
+            .unwrap();
+        let run = r.try_start_run(&auto, &ev, &src, "simulate").unwrap().expect("first claim");
+        assert!(r.try_start_run(&auto, &ev, &src, "simulate").unwrap().is_none(), "the same event never fires the same automation twice");
+        r.finish_run(run, "simulated", &json!({"actions": []})).unwrap();
+        assert_eq!(r.recent_run_counts(&auto, &src, 60).unwrap(), (1, 1));
+        let view = r.automation_event(&ev).unwrap().expect("view");
+        assert_eq!((view.label.as_str(), view.cls_label.as_deref()), ("person", Some("person")));
+        assert!(r.list_automations().unwrap().iter().any(|a| a.id == auto));
+
+        r.with(|c| {
+            c.execute("INSERT INTO automation_runs (automation_id, mode, status) VALUES ($1::text::uuid, 'test_simulate', 'queued')", &[&auto])?;
+            Ok(())
+        })
+        .unwrap();
+        let t = r.claim_queued_test().unwrap().expect("queued test");
+        assert_eq!((t.automation_id.as_deref(), t.mode.as_str()), (Some(auto.as_str()), "test_simulate"));
+        assert!(r.claim_queued_test().unwrap().is_none());
+        r.finish_run(t.run_id, "simulated", &json!({})).unwrap();
+        r.with(|c| {
+            c.execute("DELETE FROM automations WHERE id=$1::text::uuid", &[&auto])?;
+            Ok(())
+        })
+        .unwrap();
         cleanup(&r, &src);
     }
 }

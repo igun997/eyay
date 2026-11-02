@@ -110,6 +110,29 @@ pub fn indication_flags(rules: &[Rule], label: &str, kind: &str, burst_ms: i32, 
         .collect()
 }
 
+/// Best certainty per `object` rule key over the follow-up photos: (score, detector label of the object).
+pub type ObjectHits = std::collections::HashMap<String, (f32, String)>;
+
+/// Evaluate kind=`object` rules (a knife, scissors, ... seen next to the person) for a finished burst. A rule that saw nothing yields
+/// an untriggered flag with no certainty, so the event shows it was checked.
+pub fn object_flags(rules: &[Rule], label: &str, hits: &ObjectHits) -> Vec<Flag> {
+    rules
+        .iter()
+        .filter(|r| r.kind == "object" && r.applies_to.iter().any(|l| l == label))
+        .map(|r| {
+            let best = hits.get(&r.key);
+            let hit = best.is_some_and(|(s, _)| *s >= r.threshold);
+            Flag {
+                rule: r.key.clone(), title: r.title.clone(), prob: best.map(|(s, _)| (s * 10_000.0).round() / 10_000.0), threshold: r.threshold,
+                severity: r.severity.clone(), triggered: hit, opens_incident: r.opens_incident,
+                detail: best.filter(|_| hit).map(|(s, o)| {
+                    format!("{o} seen next to the person (certainty {s:.2}) - read from the camera image, small or hidden objects are often missed, needs human review")
+                }),
+            }
+        })
+        .collect()
+}
+
 /// Merge `new` flags into the event (row-locked), then apply the consequences of the triggered ones.
 pub fn apply_flags(tx: &mut dyn Tx, event_id: &str, new: &[Flag], now: DateTime<Utc>) -> Result<()> {
     if new.is_empty() {
@@ -222,5 +245,21 @@ mod tests {
         assert!(!f("lingering", 4000));
         assert!(!f("moving", 9000));
         assert!(indication_flags(std::slice::from_ref(&rule), "car", "lingering", 9000, "s").is_empty());
+    }
+
+    #[test]
+    fn object_rule_triggers_on_the_best_certainty_and_reports_which_object() {
+        let rule = Rule {
+            key: "weapon_object".into(), title: "Knife".into(), kind: "object".into(), question: None, applies_to: vec!["person".into()],
+            threshold: 0.35, config: json!({"objects": ["knife"], "margin": 0.3}), severity: "HIGH".into(), opens_incident: true, position: 0,
+        };
+        let hits = ObjectHits::from([("weapon_object".to_string(), (0.52, "knife".to_string()))]);
+        let f = object_flags(std::slice::from_ref(&rule), "person", &hits);
+        assert!(f[0].triggered && f[0].prob == Some(0.52) && f[0].detail.as_deref().unwrap().starts_with("knife seen next to the person"));
+        let weak = ObjectHits::from([("weapon_object".to_string(), (0.2, "knife".to_string()))]);
+        assert!(!object_flags(std::slice::from_ref(&rule), "person", &weak)[0].triggered);
+        let none = object_flags(std::slice::from_ref(&rule), "person", &ObjectHits::new());
+        assert!(!none[0].triggered && none[0].prob.is_none(), "checked, nothing seen");
+        assert!(object_flags(std::slice::from_ref(&rule), "car", &hits).is_empty());
     }
 }

@@ -11,7 +11,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use tracing::{error, info, warn};
 
-use crate::behavior::{Rule, apply_flags, indication_flags};
+use crate::behavior::{ObjectHits, Rule, apply_flags, indication_flags, object_flags};
 use crate::model::{BBox, Category, EventRecord, Snapshot, SourceInfo};
 use crate::repo::Repository;
 use crate::tracker::Tracked;
@@ -86,6 +86,8 @@ struct Pending {
     last_count: usize,
     errors: u32,
     last_box: Option<BBox>,
+    /// best certainty of the objects the `object` rules look for, seen next to the person in any analysed frame of the burst
+    objects: ObjectHits,
 }
 
 impl Pending {
@@ -122,7 +124,10 @@ impl BurstManager {
             title: cat.map_or_else(|| rec.label.clone(), |c| c.title.clone()), track_id: rec.track_id, t0: now, frames, burst_s,
             taken: 1, boxes: vec![track.map(box_of)], last_ms: 0,
             last_count: tracked.iter().filter(|t| t.label == rec.label).count(), errors: 0, last_box: track.map(box_of),
+            objects: ObjectHits::new(),
         };
+        let mut p = p;
+        self.observe_objects(&mut p, tracked);
         if frames <= 1 || burst_s <= 0.0 || self.pending.len() >= self.max_pending {
             if self.pending.len() >= self.max_pending && frames > 1 && burst_s > 0.0 {
                 warn!("{}: {} bursts pending, event {} keeps a single snapshot", self.source.code, self.pending.len(), &rec.event_id[..8.min(rec.event_id.len())]);
@@ -133,10 +138,41 @@ impl BurstManager {
         self.pending.insert(rec.event_id.clone(), p);
     }
 
+    /// Look for the objects of `object` rules next to the person of this burst in the current frame (every analysed frame, not only
+    /// when a follow-up photo is due, so a knife that shows for a moment is still noticed).
+    fn observe_objects(&self, p: &mut Pending, tracked: &[Tracked]) {
+        let rules = (self.rules)();
+        for r in rules.iter().filter(|r| r.kind == "object" && r.applies_to.contains(&p.label)) {
+            let (Some(person), Some(objs)) = (p.last_box, r.config.get("objects").and_then(|v| v.as_array())) else { continue };
+            let margin = r.config.get("margin").and_then(|v| v.as_f64()).unwrap_or(0.3).clamp(0.0, 1.0);
+            let (x0, x1) = (person.x - margin * person.w, person.x + person.w * (1.0 + margin));
+            let (y0, y1) = (person.y - margin * person.h, person.y + person.h * (1.0 + margin));
+            for t in tracked.iter().filter(|t| objs.iter().any(|o| o.as_str() == Some(t.label.as_str()))) {
+                let (cx, cy) = box_of(t).centre();
+                if (x0..=x1).contains(&cx) && (y0..=y1).contains(&cy) {
+                    let best = p.objects.entry(r.key.clone()).or_insert((0.0, t.label.clone()));
+                    if t.score > best.0 {
+                        *best = (t.score, t.label.clone());
+                    }
+                }
+            }
+        }
+    }
+
     /// Take the next due sample of every pending burst from the current frame.
     pub fn step(&mut self, tracked: &[Tracked], snapshot: &dyn Fn() -> Result<Snapshot>, now: DateTime<Utc>) {
         if self.pending.is_empty() {
             return;
+        }
+        let ids: Vec<String> = self.pending.keys().cloned().collect();
+        for id in ids {
+            let Some(mut p) = self.pending.remove(&id) else { continue };
+            if let Some(t) = follow(tracked, &p.label, p.track_id, p.last_box.as_ref()) {
+                p.track_id = t.track_id;
+                p.last_box = Some(box_of(t));
+            }
+            self.observe_objects(&mut p, tracked);
+            self.pending.insert(id, p);
         }
         let mut snap: Option<Snapshot> = None;
         let ids: Vec<String> = self.pending.keys().cloned().collect();
@@ -205,10 +241,15 @@ impl BurstManager {
                 let detail = format!("{n} snapshot{} over {:.1} s", if n != 1 { "s" } else { "" }, f64::from(p.last_ms) / 1000.0);
                 tx.add_timeline(inc, "system", &format!("Indication: {sentence}"), Some(&detail), Some(&p.event_id), now)?;
             }
-            apply_flags(tx, &p.event_id, &indication_flags(&rules, &p.label, kind, p.last_ms, &sentence), now)
+            let mut flags = indication_flags(&rules, &p.label, kind, p.last_ms, &sentence);
+            flags.extend(object_flags(&rules, &p.label, &p.objects));
+            apply_flags(tx, &p.event_id, &flags, now)
         });
         match res {
-            Ok(()) => info!("{}: burst {} done: {sentence} ({n} snapshots, {} ms)", self.source.code, &p.event_id[..8.min(p.event_id.len())], p.last_ms),
+            Ok(()) => {
+                crate::automation::notify(&p.event_id);
+                info!("{}: burst {} done: {sentence} ({n} snapshots, {} ms)", self.source.code, &p.event_id[..8.min(p.event_id.len())], p.last_ms);
+            }
             Err(e) => error!("{}: finalizing burst of {} failed: {e:#}", self.source.code, &p.event_id[..8.min(p.event_id.len())]),
         }
     }
@@ -294,5 +335,38 @@ mod tests {
         m.flush(Utc::now());
         assert!(repo.state().events[&ev2].burst_done);
         assert_eq!(m.pending(), 0);
+    }
+
+    fn knife_rule() -> Rule {
+        Rule {
+            key: "weapon_object".into(), title: "Knife".into(), kind: "object".into(), question: None, applies_to: vec!["person".into()],
+            threshold: 0.35, config: serde_json::json!({"objects": ["knife"], "margin": 0.3}), severity: "HIGH".into(), opens_incident: true, position: 0,
+        }
+    }
+
+    fn obj(label: &str, x: f32, y: f32, score: f32) -> Tracked {
+        Tracked { track_id: 99, label: label.into(), score, bbox: [x, y, x + 0.03, y + 0.03] }
+    }
+
+    #[test]
+    fn a_knife_next_to_the_person_during_the_burst_raises_a_warning_sign_and_one_far_away_does_not() {
+        for (knife, expect) in [(obj("knife", 0.35, 0.25, 0.5), true), (obj("knife", 0.9, 0.9, 0.9), false), (obj("knife", 0.35, 0.25, 0.2), false)] {
+            let repo = Arc::new(FakeRepo::default());
+            let (ev, inc) = repo.seed_event("person", "HIGH", Some("HIGH"));
+            let cats = HashMap::from([("person".to_string(), Category { burst_s: 6, burst_frames: 4, ..cat("person", "HIGH", true, 30) })]);
+            let mut m = BurstManager::new(repo.clone(), source(&["person"], 0.4), Box::new(|| vec![knife_rule()]));
+            let t0 = Utc::now();
+            let person = tr("person", 1, 0.3); // box x 0.3..0.4, y 0.1..0.3
+            m.start(&rec(inc.as_deref(), &ev), std::slice::from_ref(&person), &cats, t0);
+            // the knife shows for a single analysed frame between follow-up photos
+            m.step(&[person.clone(), knife], &snap, t0 + Duration::milliseconds(700));
+            for secs in [2, 4, 6] {
+                m.step(std::slice::from_ref(&person), &snap, t0 + Duration::seconds(secs));
+            }
+            let s = repo.state();
+            let flag = s.events[&ev].flags.iter().find(|f| f["rule"] == "weapon_object").expect("rule was checked");
+            assert_eq!(flag["triggered"] == serde_json::json!(true), expect, "{flag}");
+            assert_eq!(s.events[&ev].suspicious, expect);
+        }
     }
 }

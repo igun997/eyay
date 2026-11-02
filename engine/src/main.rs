@@ -1,6 +1,8 @@
 //! eyeai-engine: the EyeAI worker. Decode -> YOLOX -> track -> events/incidents/snapshots in Postgres, server-side
 //! classification, annotated live MJPEG. See docs/ARCHITECTURE.md.
+mod actions;
 mod api;
+mod automation;
 mod behavior;
 mod burst;
 mod classifier;
@@ -68,6 +70,17 @@ fn main() -> Result<()> {
     let classifier = ClassifierService::new(cls_repo.clone(), settings.classifier.clone(), Box::new(move || cls_rules.get()), Box::new(move || tuning.get()))?;
     let status = classifier.status_fn();
 
+    // alerts and automations: its own small pool, and a channel the detection threads use to announce changed events
+    let events_rx = automation::init();
+    let auto_repo = Arc::new(PgRepository::new(&settings.database_url, 2));
+    let auto_thread = {
+        let (stop, repo) = (stop.clone(), auto_repo.clone());
+        std::thread::Builder::new().name("automations".into()).spawn(move || {
+            repo.wait_ready(&stop);
+            automation::Dispatcher::new(repo).run_forever(events_rx, stop);
+        })?
+    };
+
     let mgr_thread = {
         let (repo, mgr, stop) = (repo.clone(), manager.clone(), stop.clone());
         std::thread::Builder::new().name("manager".into()).spawn(move || {
@@ -92,6 +105,7 @@ fn main() -> Result<()> {
     manager.shutdown();
     let _ = mgr_thread.join();
     let _ = cls_thread.join();
+    let _ = auto_thread.join();
     let _ = repo.list_sources(); // keep the trait import used in release builds
     served
 }

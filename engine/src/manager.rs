@@ -25,8 +25,13 @@ pub struct WorkerManager {
 impl WorkerManager {
     pub fn new(repo: Arc<dyn crate::repo::Repository>, settings: Settings, rules: Arc<RuleCache>) -> Arc<Self> {
         let categories: Categories = Arc::new(RwLock::new(HashMap::new()));
+        let check_on = settings.classifier.enabled();
+        let rules_for_check = rules.clone();
+        let needs_check: crate::decision::NeedsCheck = Arc::new(move |label: &str| {
+            check_on && rules_for_check.get().iter().any(|r| r.kind == "classifier" && r.applies_to.iter().any(|l| l == label))
+        });
         let ctx = Arc::new(RunnerCtx {
-            repo: repo.clone(), categories: categories.clone(), rules, model: settings.model.clone().into(),
+            repo: repo.clone(), categories: categories.clone(), rules, needs_check, model: settings.model.clone().into(),
             ort_threads: settings.ort_threads, target_fps: settings.target_fps, stall: Duration::from_secs_f32(settings.stall_s),
         });
         Arc::new(Self { repo, settings, ctx, categories, runners: Mutex::new(HashMap::new()), stop: Arc::new(AtomicBool::new(false)) })

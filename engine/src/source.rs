@@ -32,6 +32,8 @@ pub struct RunnerCtx {
     pub repo: Arc<dyn Repository>,
     pub categories: Categories,
     pub rules: Arc<RuleCache>,
+    /// does this label have second-AI-check questions (false when that check is not configured)
+    pub needs_check: crate::decision::NeedsCheck,
     pub model: PathBuf,
     pub ort_threads: Option<usize>,
     pub target_fps: f32,
@@ -156,7 +158,7 @@ impl Worker {
         let (mut was_online, mut backoff) = (false, 2.0_f64);
         let rules_cache = self.ctx.rules.clone();
         let mut bursts = BurstManager::new(self.ctx.repo.clone(), src.clone(), Box::new(move || rules_cache.get()));
-        let mut decider = EventDecider::new(self.ctx.repo.clone(), src.clone());
+        let mut decider = EventDecider::new(self.ctx.repo.clone(), src.clone(), self.ctx.needs_check.clone());
         while !self.stop.load(Ordering::Relaxed) {
             if detector.is_none() {
                 let cur = self.shared.lock().unwrap().clone();
@@ -250,8 +252,21 @@ impl Worker {
                 decider.source = src.clone();
                 bursts.source = src.clone();
             }
-            // live settings: no reconnect needed
-            let want = (src.min_confidence, src.config.detector.nms_iou, src.labels.clone());
+            // live settings: no reconnect needed. The detector also looks for the objects of `object` rules (a knife next to a person),
+            // with their own certainty floor; detections of watched labels below the camera's certainty are dropped again below.
+            let object_rules: Vec<_> = self.ctx.rules.get().into_iter().filter(|r| r.kind == "object").collect();
+            let mut labels = src.labels.clone();
+            let mut floor = src.min_confidence;
+            for r in &object_rules {
+                floor = floor.min(r.threshold);
+                for o in r.config.get("objects").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|o| o.as_str()) {
+                    if !labels.iter().any(|l| l == o) {
+                        labels.push(o.to_string());
+                    }
+                }
+            }
+            labels.sort();
+            let want = (floor, src.config.detector.nms_iou, labels);
             if applied.as_ref() != Some(&want) {
                 match detector.reconfigure(want.0, want.1, &want.2) {
                     Ok(()) => applied = Some(want),
@@ -287,6 +302,7 @@ impl Worker {
                 }
             };
             let infer_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            let dets: Vec<_> = dets.into_iter().filter(|d| !src.labels.iter().any(|l| l == d.label) || d.score >= src.min_confidence).collect();
             let tracked = tracker.update(&dets);
             let readings = speed.as_mut().map(|e| e.update(&tracked, seq as f64 / fps)).unwrap_or_default();
             let cal = &src.config.calibration;

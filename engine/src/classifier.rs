@@ -1,10 +1,11 @@
-//! Server-side classification of event snapshots with a System One decision model.
+//! Optional second AI check: yes/no behaviour questions about an event's snapshots, answered by a System One decision model.
 //!
-//! A separate thread claims events with `pipeline='queued'`, crops the stored snapshot around the detection box and asks
-//! `POST {CLASSIFIER_URL}/v1/systemone` (Ollama serving e.g. Liquid AI `d1`) one `choice` question: person / vehicle /
-//! false_alarm, plus one yes/no (`noul`) question per behaviour rule. The answer is only stored; it never dismisses an event or
-//! touches incidents, and detection threads never wait on this module.
-use std::collections::{BTreeMap, HashMap};
+//! The camera AI (the detector) already classifies every event when it is written. When `CLASSIFIER_URL` is set and behaviour
+//! rules of kind `classifier` apply to an event, the event is queued here: a separate thread claims it, crops the stored snapshot
+//! around the person (+50 % margin) and asks `POST {CLASSIFIER_URL}/v1/systemone` (Ollama serving e.g. Liquid AI `d1`) one
+//! yes/no (`noul`) question per rule. The answers only become warning signs for a person to review; nothing is dismissed or
+//! blocked, and detection threads never wait on this module.
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,9 +23,7 @@ use crate::repo::Repository;
 
 /// Hosted endpoints (e.g. the Runpod proxy sits behind Cloudflare) reject unidentified clients; always send our own.
 pub const USER_AGENT: &str = "eyeai-worker/1.0";
-pub const LABELS: [&str; 3] = ["person", "vehicle", "false_alarm"];
 pub const STATE: &str = "Snapshot from a security camera, cropped around a possible detection.";
-pub const CROP_MARGIN: f64 = 0.15;
 pub const RULE_CROP_MARGIN: f64 = 0.5; // behaviour rules need hands and surroundings
 const MIN_CROP_PX: i64 = 40;
 const STATS_EVERY: Duration = Duration::from_secs(5);
@@ -114,16 +113,6 @@ pub struct ClassifyJob {
     pub queue_depth: i64,
 }
 
-#[derive(Debug, Clone)]
-pub struct Classification {
-    pub label: String,
-    /// probability of `label`
-    pub confidence: f32,
-    pub probs: BTreeMap<String, f32>,
-    pub model: String,
-    pub ms: u64,
-}
-
 pub fn crop_for_classification(jpeg: &[u8], bbox: Option<&BBox>, margin: f64) -> Result<Vec<u8>, ClassifierError> {
     crop_jpeg(jpeg, bbox, margin, MIN_CROP_PX).map_err(|e| ClassifierError(format!("{e:#}")))
 }
@@ -146,23 +135,6 @@ impl DecisionClient {
 
     fn images(jpeg: &[u8]) -> Value {
         json!([base64::engine::general_purpose::STANDARD.encode(jpeg)])
-    }
-
-    pub fn request_body(&self, jpeg: &[u8]) -> Value {
-        json!({
-            "model": self.cfg.model,
-            "state": STATE,
-            "images": Self::images(jpeg),
-            "questions": {"class": {
-                "type": "choice",
-                "instructions": "What does this security-camera snapshot show?",
-                "criteria": {
-                    "person": "A person is clearly visible",
-                    "vehicle": "A car, truck, bus or motorcycle is clearly visible",
-                    "false_alarm": "No person or vehicle: shadow, lighting, animal, goods or an empty scene",
-                },
-            }},
-        })
     }
 
     /// yes/no (`noul`) questions about the same snapshot; same state wording as the class call.
@@ -188,11 +160,6 @@ impl DecisionClient {
         Ok(out)
     }
 
-    pub fn classify(&self, jpeg: &[u8]) -> Result<Classification, ClassifierError> {
-        let (payload, ms) = self.post(&self.request_body(jpeg))?;
-        self.parse(&payload, ms)
-    }
-
     fn post(&self, body: &Value) -> Result<(Value, u64), ClassifierError> {
         let url = format!("{}/v1/systemone", self.cfg.url.as_deref().unwrap_or_default());
         let t0 = Instant::now();
@@ -210,30 +177,19 @@ impl DecisionClient {
         };
         Ok((payload, t0.elapsed().as_millis() as u64))
     }
-
-    pub fn parse(&self, payload: &Value, ms: u64) -> Result<Classification, ClassifierError> {
-        let bad = || ClassifierError(format!("unexpected classifier answer: {}", trunc(&payload.to_string(), 150)));
-        let ans = payload.get("answers").and_then(|a| a.get("class")).ok_or_else(bad)?;
-        let choice = ans.get("choice").and_then(Value::as_str).ok_or_else(bad)?;
-        let probs: BTreeMap<String, f32> = ans
-            .get("probabilities")
-            .and_then(Value::as_object)
-            .ok_or_else(bad)?
-            .iter()
-            .map(|(k, v)| v.as_f64().map(|f| (k.clone(), f as f32)).ok_or_else(bad))
-            .collect::<Result<_, _>>()?;
-        if !LABELS.contains(&choice) || !probs.contains_key(choice) {
-            return err(format!("unknown class {choice:?}"));
-        }
-        Ok(Classification { label: choice.to_string(), confidence: probs[choice], probs: probs.clone(), model: self.cfg.model.clone(), ms })
-    }
 }
 
 fn trunc(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-/// The classifier thread. `run_once` is one claim+classify step (what the tests drive).
+struct RuleOutcome {
+    flags: Vec<Flag>,
+    /// set when questions were asked and none could be answered
+    all_failed: Option<String>,
+}
+
+/// The second-check thread. `run_once` is one claim + answer step (what the tests drive).
 pub struct ClassifierService {
     repo: Arc<dyn Repository>,
     pub cfg: ClassifierConfig,
@@ -266,7 +222,7 @@ impl ClassifierService {
         })
     }
 
-    /// Classify at most one queued event. Returns true when an event was processed (success or failure).
+    /// Answer the behaviour questions of at most one queued event. Returns true when an event was processed.
     pub fn run_once(&mut self, now: Instant) -> anyhow::Result<bool> {
         let backoff: Vec<String> = self.retry_at.iter().filter(|(_, t)| **t > now).map(|(i, _)| i.clone()).collect();
         // dashboard settings (engine_settings 'defaults' -> classifier) override the environment, live
@@ -278,62 +234,60 @@ impl ClassifierService {
         cfg.batch = t.batch.unwrap_or(cfg.batch);
         let frames = if cfg.rules_enabled { cfg.rule_frames } else { 1 };
         let Some(job) = self.repo.claim_queued_event(&backoff, frames)? else { return Ok(false) };
-        let Some(jpeg) = job.jpeg.as_deref() else {
+        if job.jpeg.is_none() {
             self.repo.store_classification_failure(&job.event_id, "event has no snapshot", false)?;
             return Ok(true);
-        };
-        let client = self.client.as_ref().expect("run_once needs an enabled classifier");
+        }
         let started = Instant::now();
-        let result = crop_for_classification(jpeg, job.bbox.as_ref(), CROP_MARGIN).and_then(|c| client.classify(&c));
-        let mut result = match result {
-            Ok(r) => r,
-            Err(e) => {
-                let n = self.attempts.get(&job.event_id).copied().unwrap_or(0) + 1;
-                if n < self.cfg.max_attempts {
-                    self.attempts.insert(job.event_id.clone(), n);
-                    let wait = (self.cfg.poll_s * f64::from(1u32 << n)).min(30.0);
-                    self.retry_at.insert(job.event_id.clone(), now + Duration::from_secs_f64(wait));
-                    warn!("event {} classification failed (attempt {n}/{}): {e}", job.event_id, self.cfg.max_attempts);
-                    self.repo.store_classification_failure(&job.event_id, &e.to_string(), true)?;
-                } else {
-                    error!("event {} classification failed for good after {n} attempts: {e}", job.event_id);
-                    self.attempts.remove(&job.event_id);
-                    self.retry_at.remove(&job.event_id);
-                    self.repo.store_classification_failure(&job.event_id, &e.to_string(), false)?;
-                }
-                return Ok(true);
+        let outcome = self.evaluate_rules(&cfg, &job);
+        if let Some(msg) = outcome.all_failed {
+            // every question failed (network, HTTP, bad answer): retry with backoff, then give up. The event keeps the camera AI's
+            // classification either way; it only misses the second AI check.
+            let n = self.attempts.get(&job.event_id).copied().unwrap_or(0) + 1;
+            if n < self.cfg.max_attempts {
+                self.attempts.insert(job.event_id.clone(), n);
+                let wait = (self.cfg.poll_s * f64::from(1u32 << n)).min(30.0);
+                self.retry_at.insert(job.event_id.clone(), now + Duration::from_secs_f64(wait));
+                warn!("event {} second check failed (attempt {n}/{}): {msg}", job.event_id, self.cfg.max_attempts);
+                self.repo.store_classification_failure(&job.event_id, &msg, true)?;
+            } else {
+                error!("event {} second check failed for good after {n} attempts: {msg}", job.event_id);
+                self.attempts.remove(&job.event_id);
+                self.retry_at.remove(&job.event_id);
+                self.repo.store_classification_failure(&job.event_id, &msg, false)?;
             }
-        };
+            return Ok(true);
+        }
         self.attempts.remove(&job.event_id);
         self.retry_at.remove(&job.event_id);
-        let class_ms = result.ms;
-        let (flags, rule_error) = self.evaluate_rules(&cfg, &job, &result);
-        result.ms = started.elapsed().as_millis() as u64; // cls_ms = class + rules
-        self.repo.store_classification(&job.event_id, &result, &flags, rule_error.as_deref())?;
-        let hits: Vec<&str> = flags.iter().filter(|f| f.triggered).map(|f| f.rule.as_str()).collect();
+        let ms = started.elapsed().as_millis() as u64;
+        self.repo.store_rule_result(&job.event_id, &outcome.flags, None, ms)?;
+        crate::automation::notify(&job.event_id);
+        let hits: Vec<&str> = outcome.flags.iter().filter(|f| f.triggered).map(|f| f.rule.as_str()).collect();
         info!(
-            "event {} -> {} {:.2} (class {class_ms} ms, total {} ms, {} rules{})", job.event_id, result.label, result.confidence,
-            result.ms, flags.len(), if hits.is_empty() { String::new() } else { format!(", indicators: {}", hits.join(",")) }
+            "event {} second check done ({ms} ms, {} rules{})", job.event_id, outcome.flags.len(),
+            if hits.is_empty() { String::new() } else { format!(", warning signs: {}", hits.join(",")) }
         );
         Ok(true)
     }
 
-    /// Ask the yes/no rule questions. Never fails and never loses the class result (a failed rule has prob None).
-    fn evaluate_rules(&self, cfg: &ClassifierConfig, job: &ClassifyJob, result: &Classification) -> (Vec<Flag>, Option<String>) {
+    /// Ask the yes/no rule questions. A question that fails has no probability; `all_failed` is set only when none was answered.
+    fn evaluate_rules(&self, cfg: &ClassifierConfig, job: &ClassifyJob) -> RuleOutcome {
         let client = self.client.as_ref().expect("enabled");
-        if !cfg.rules_enabled || result.label == "false_alarm" {
-            return (vec![], None);
+        let none = RuleOutcome { flags: vec![], all_failed: None };
+        if !cfg.rules_enabled {
+            return none;
         }
         if job.queue_depth > cfg.rule_max_queue {
             info!("event {}: {} events queued, behaviour rules skipped", &job.event_id[..8.min(job.event_id.len())], job.queue_depth);
-            return (vec![], None);
+            return none;
         }
         let rules: Vec<Rule> = (self.rules)()
             .into_iter()
             .filter(|r| r.kind == "classifier" && r.question.is_some() && r.applies_to.contains(&job.label))
             .collect();
         if rules.is_empty() {
-            return (vec![], None);
+            return none;
         }
         let mut probs: HashMap<&str, Option<f32>> = rules.iter().map(|r| (r.key.as_str(), None)).collect();
         let mut errors: Vec<String> = Vec::new();
@@ -379,8 +333,8 @@ impl ClassifierService {
                 }
             })
             .collect();
-        let err = (!errors.is_empty() && probs.values().all(Option::is_none)).then(|| format!("behaviour rules unavailable: {}", errors[0]));
-        (flags, err)
+        let all_failed = (!errors.is_empty() && probs.values().all(Option::is_none)).then(|| format!("second check unavailable: {}", errors[0]));
+        RuleOutcome { flags, all_failed }
     }
 
     pub fn run_forever(mut self, stop: Arc<AtomicBool>) {
@@ -456,6 +410,10 @@ mod tests {
         repo.add_queued(Some(jpeg()), Some(BBox { x: 0.3, y: 0.3, w: 0.2, h: 0.4 }), "person")
     }
 
+    fn q(key: &str) -> Vec<(String, String)> {
+        vec![(key.to_string(), format!("Is there a {key}?"))]
+    }
+
     #[test]
     fn config_defaults_disabled_and_from_env_map() {
         let c = ClassifierConfig::from_map(&HashMap::new());
@@ -471,40 +429,31 @@ mod tests {
     fn request_sends_an_explicit_user_agent() {
         // Cloudflare in front of hosted endpoints (e.g. the Runpod proxy) answers 403/1010 to default client User-Agents.
         let s = StubServer::start();
-        DecisionClient::new(&cfg(&s.url)).unwrap().classify(b"\xff\xd8fakejpeg").unwrap();
+        DecisionClient::new(&cfg(&s.url)).unwrap().ask_rules(b"\xff\xd8fakejpeg", &q("weapon")).unwrap();
         assert_eq!(s.requests.lock().unwrap()[0].user_agent.as_deref(), Some("eyeai-worker/1.0"));
     }
 
     #[test]
     fn request_body_matches_the_spec_exactly() {
         let s = StubServer::start();
-        let r = DecisionClient::new(&cfg(&s.url)).unwrap().classify(b"\xff\xd8fakejpeg").unwrap();
+        let got = DecisionClient::new(&cfg(&s.url)).unwrap().ask_rules(b"\xff\xd8fakejpeg", &q("weapon")).unwrap();
         let req = s.requests.lock().unwrap()[0].clone();
         assert_eq!(req.path, "/v1/systemone");
         assert_eq!(req.body, json!({
             "model": "d1",
             "state": "Snapshot from a security camera, cropped around a possible detection.",
             "images": [base64::engine::general_purpose::STANDARD.encode(b"\xff\xd8fakejpeg")],
-            "questions": {"class": {
-                "type": "choice",
-                "instructions": "What does this security-camera snapshot show?",
-                "criteria": {
-                    "person": "A person is clearly visible",
-                    "vehicle": "A car, truck, bus or motorcycle is clearly visible",
-                    "false_alarm": "No person or vehicle: shadow, lighting, animal, goods or an empty scene",
-                },
-            }},
+            "questions": {"weapon": {"type": "noul", "instructions": "Is there a weapon?"}},
         }));
-        assert!(r.label == "person" && (r.confidence - 0.91).abs() < 1e-6 && (r.probs["false_alarm"] - 0.07).abs() < 1e-6 && r.model == "d1");
+        assert!((got["weapon"] - 0.05).abs() < 1e-6);
     }
 
     #[test]
-    fn malformed_answers_raise() {
-        for bad in [r#"{"answers":{}}"#, r#"{"answers":{"class":{"choice":"banana","probabilities":{"banana":1}}}}"#,
-                    r#"{"answers":{"class":{"choice":"person"}}}"#, r#"{"nope":1}"#, "[]"] {
+    fn malformed_answers_are_errors() {
+        for bad in [r#"{"answers":{}}"#, r#"{"answers":{"weapon":{"noul":"high"}}}"#, r#"{"answers":{"weapon":{"noul":1.5}}}"#, r#"{"nope":1}"#, "[]"] {
             let s = StubServer::start();
             s.cfg.lock().unwrap().body = Some(bad.into());
-            assert!(DecisionClient::new(&cfg(&s.url)).unwrap().classify(b"x").is_err(), "{bad}");
+            assert!(DecisionClient::new(&cfg(&s.url)).unwrap().ask_rules(b"x", &q("weapon")).is_err(), "{bad}");
         }
     }
 
@@ -517,28 +466,32 @@ mod tests {
             c.body = Some(r#"{"error":"llama-server terminated"}"#.into());
         }
         let client = DecisionClient::new(&cfg(&s.url)).unwrap();
-        assert!(client.classify(b"x").unwrap_err().0.contains("HTTP 500"));
+        assert!(client.ask_rules(b"x", &q("weapon")).unwrap_err().0.contains("HTTP 500"));
         {
             let mut c = s.cfg.lock().unwrap();
             c.status = 200;
             c.body = Some("<html>".into());
         }
-        assert!(client.classify(b"x").unwrap_err().0.contains("invalid JSON"));
+        assert!(client.ask_rules(b"x", &q("weapon")).unwrap_err().0.contains("invalid JSON"));
         let dead = DecisionClient::new(&ClassifierConfig { timeout_s: 2.0, ..cfg("http://127.0.0.1:1") }).unwrap();
-        assert!(dead.classify(b"x").unwrap_err().0.contains("unreachable"));
+        assert!(dead.ask_rules(b"x", &q("weapon")).unwrap_err().0.contains("unreachable"));
     }
 
     #[test]
-    fn success_stores_the_result_and_the_classifier_gets_the_crop() {
+    fn rules_trigger_at_the_threshold_and_the_model_receives_the_wider_crop() {
         let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
+        s.cfg.lock().unwrap().noul = HashMap::from([("weapon".to_string(), 0.8), ("mask".to_string(), 0.3)]);
         let id = queued(&repo);
-        let mut svc = service(&repo, cfg(&s.url), vec![]);
+        let mut svc = service(&repo, cfg(&s.url), vec![rule("weapon", 0.7), rule("mask", 0.7)]);
         assert!(svc.run_once(Instant::now()).unwrap());
+        let e = repo.state().events[&id].clone();
+        assert_eq!(e.pipeline, "ready");
+        assert!(e.suspicious && e.severity == "CRITICAL");
+        assert!(e.flags.iter().any(|f| f["rule"] == "weapon" && f["triggered"] == json!(true)));
+        assert!(e.flags.iter().any(|f| f["rule"] == "mask" && f["triggered"] == json!(false)));
+        assert_eq!(s.hits(), 2, "one request per rule by default, no class question any more");
         let sent = base64::engine::general_purpose::STANDARD.decode(s.requests.lock().unwrap()[0].body["images"][0].as_str().unwrap()).unwrap();
-        let img = image::load_from_memory(&sent).unwrap();
-        assert!(img.width() < 640, "classifier should receive the crop, not the full frame");
-        let e = &repo.state().events[&id];
-        assert!(e.pipeline == "ready" && e.cls_label.as_deref() == Some("person") && e.cls_model.as_deref() == Some("d1"));
+        assert!(image::load_from_memory(&sent).unwrap().width() < 640, "the model gets the crop around the person, not the full frame");
         assert!(!svc.run_once(Instant::now()).unwrap(), "nothing left");
     }
 
@@ -547,7 +500,7 @@ mod tests {
         let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
         s.cfg.lock().unwrap().status = 500;
         let id = queued(&repo);
-        let mut svc = service(&repo, ClassifierConfig { max_attempts: 3, ..cfg(&s.url) }, vec![]);
+        let mut svc = service(&repo, ClassifierConfig { max_attempts: 3, ..cfg(&s.url) }, vec![rule("weapon", 0.7)]);
         let t = Instant::now();
         assert!(svc.run_once(t).unwrap());
         assert_eq!(repo.state().events[&id].pipeline, "queued");
@@ -555,7 +508,6 @@ mod tests {
         assert!(!svc.run_once(t + Duration::from_millis(1)).unwrap(), "still in backoff");
         assert_eq!(s.hits(), 1);
         assert!(svc.run_once(t + Duration::from_secs(100)).unwrap());
-        assert_eq!(repo.state().events[&id].pipeline, "queued");
         assert!(svc.run_once(t + Duration::from_secs(200)).unwrap());
         assert_eq!(repo.state().events[&id].pipeline, "failed");
         assert_eq!(s.hits(), 3);
@@ -566,54 +518,36 @@ mod tests {
     fn event_without_snapshot_fails_without_calling_the_model() {
         let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
         let id = repo.add_queued(None, None, "person");
-        service(&repo, cfg(&s.url), vec![]).run_once(Instant::now()).unwrap();
+        service(&repo, cfg(&s.url), vec![rule("weapon", 0.7)]).run_once(Instant::now()).unwrap();
         assert_eq!(s.hits(), 0);
         let e = &repo.state().events[&id];
         assert!(e.pipeline == "failed" && e.cls_error.as_deref().unwrap().contains("no snapshot"));
     }
 
     #[test]
-    fn rules_trigger_at_the_threshold_and_open_the_consequences() {
-        let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
-        s.cfg.lock().unwrap().noul = HashMap::from([("weapon".to_string(), 0.8), ("mask".to_string(), 0.3)]);
-        let id = queued(&repo);
-        let mut svc = service(&repo, cfg(&s.url), vec![rule("weapon", 0.7), rule("mask", 0.7)]);
-        svc.run_once(Instant::now()).unwrap();
-        let e = repo.state().events[&id].clone();
-        assert!(e.suspicious && e.severity == "CRITICAL");
-        assert_eq!(e.flags.len(), 2);
-        assert!(e.flags.iter().any(|f| f["rule"] == "weapon" && f["triggered"] == json!(true)));
-        assert!(e.flags.iter().any(|f| f["rule"] == "mask" && f["triggered"] == json!(false)));
-        assert_eq!(s.hits(), 3, "class question + one request per rule by default");
-    }
-
-    #[test]
-    fn batch_mode_asks_all_rules_in_one_request() {
+    fn batch_mode_asks_all_rules_in_one_request_and_a_crash_means_retry() {
         let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
         queued(&repo);
         let mut svc = service(&repo, ClassifierConfig { batch: true, ..cfg(&s.url) }, vec![rule("weapon", 0.7), rule("mask", 0.7)]);
         svc.run_once(Instant::now()).unwrap();
-        assert_eq!(s.hits(), 2);
-        assert_eq!(s.requests.lock().unwrap()[1].body["questions"].as_object().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn false_alarms_skip_rules_and_a_crashing_rule_request_keeps_the_class_result() {
-        let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
-        s.cfg.lock().unwrap().body = Some(GOOD_FALSE_ALARM.into());
-        queued(&repo);
-        service(&repo, cfg(&s.url), vec![rule("weapon", 0.7)]).run_once(Instant::now()).unwrap();
-        assert_eq!(s.hits(), 1, "no rule questions for a false alarm");
+        assert_eq!(s.hits(), 1);
+        assert_eq!(s.requests.lock().unwrap()[0].body["questions"].as_object().unwrap().len(), 2);
 
         let (s2, repo2) = (StubServer::start(), Arc::new(FakeRepo::default()));
         s2.cfg.lock().unwrap().crash_multi = true;
         let id = queued(&repo2);
-        let mut svc = service(&repo2, ClassifierConfig { batch: true, ..cfg(&s2.url) }, vec![rule("weapon", 0.7), rule("mask", 0.7)]);
-        svc.run_once(Instant::now()).unwrap();
-        let e = &repo2.state().events[&id];
-        assert!(e.pipeline == "ready" && e.cls_label.as_deref() == Some("person"), "class result survives");
-        assert!(e.cls_error.as_deref().unwrap().contains("behaviour rules unavailable"));
-        assert!(!e.suspicious);
+        let mut svc2 = service(&repo2, ClassifierConfig { batch: true, ..cfg(&s2.url) }, vec![rule("weapon", 0.7), rule("mask", 0.7)]);
+        svc2.run_once(Instant::now()).unwrap();
+        assert_eq!(repo2.state().events[&id].pipeline, "queued", "nothing could be answered: retry later");
+    }
+
+    #[test]
+    fn nothing_to_ask_marks_the_event_ready_without_calling_the_model() {
+        let (s, repo) = (StubServer::start(), Arc::new(FakeRepo::default()));
+        let id = queued(&repo);
+        service(&repo, cfg(&s.url), vec![]).run_once(Instant::now()).unwrap();
+        assert_eq!(s.hits(), 0);
+        assert_eq!(repo.state().events[&id].pipeline, "ready");
     }
 
     #[test]
@@ -624,10 +558,8 @@ mod tests {
         }
         let mut svc = service(&repo, ClassifierConfig { rule_max_queue: 2, ..cfg(&s.url) }, vec![rule("weapon", 0.7)]);
         svc.run_once(Instant::now()).unwrap();
-        assert_eq!(s.hits(), 1);
+        assert_eq!(s.hits(), 0);
     }
-
-    const GOOD_FALSE_ALARM: &str = r#"{"model":"d1","answers":{"class":{"type":"choice","choice":"false_alarm","probabilities":{"person":0.05,"vehicle":0.02,"false_alarm":0.93},"confidence":0.8}}}"#;
 
     #[test]
     fn dashboard_tuning_overrides_the_environment_live() {
@@ -637,10 +569,10 @@ mod tests {
         let t2 = tuning.clone();
         let mut svc = ClassifierService::new(repo.clone(), cfg(&s.url), Box::new(|| vec![rule("weapon", 0.7)]), Box::new(move || t2.lock().unwrap().clone())).unwrap();
         svc.run_once(Instant::now()).unwrap();
-        assert_eq!(s.hits(), 1, "rules switched off from the dashboard: only the class question");
+        assert_eq!(s.hits(), 0, "behaviour questions switched off from the dashboard");
         queued(&repo);
         *tuning.lock().unwrap() = ClassifierTuning::default();
         svc.run_once(Instant::now()).unwrap();
-        assert_eq!(s.hits(), 3, "switched back on: class + the weapon question");
+        assert_eq!(s.hits(), 1, "switched back on: the weapon question is asked");
     }
 }

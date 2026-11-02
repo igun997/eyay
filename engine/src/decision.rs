@@ -18,9 +18,22 @@ use crate::repo::{NewEvent, Repository};
 use crate::speed::SpeedReading;
 use crate::tracker::Tracked;
 
+/// Does this label have behaviour questions for the optional second AI check? (false when that check is off)
+pub type NeedsCheck = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// What the camera AI says an event is, from its detector label.
+pub fn classify_label(label: &str) -> &'static str {
+    match label {
+        "person" => "person",
+        "car" | "truck" | "bus" | "motorcycle" | "bicycle" => "vehicle",
+        _ => "other",
+    }
+}
+
 pub struct EventDecider {
     repo: Arc<dyn Repository>,
     pub source: SourceInfo,
+    needs_check: NeedsCheck,
     group_window: Duration,
     hits: HashMap<(String, i32), u32>,
     reported: HashMap<(String, i32), DateTime<Utc>>,
@@ -32,9 +45,9 @@ pub struct EventDecider {
 }
 
 impl EventDecider {
-    pub fn new(repo: Arc<dyn Repository>, source: SourceInfo) -> Self {
+    pub fn new(repo: Arc<dyn Repository>, source: SourceInfo, needs_check: NeedsCheck) -> Self {
         Self {
-            repo, source, group_window: Duration::seconds(300), hits: HashMap::new(), reported: HashMap::new(),
+            repo, source, needs_check, group_window: Duration::seconds(300), hits: HashMap::new(), reported: HashMap::new(),
             last_event: HashMap::new(), events_of: HashMap::new(), stored_speed: HashMap::new(),
         }
     }
@@ -139,6 +152,7 @@ impl EventDecider {
             match res {
                 Ok(()) => {
                     self.stored_speed.insert(event_id.clone(), r.kmh);
+                    crate::automation::notify(&event_id);
                     info!("{}: event {} speed {:.0} km/h{}", self.source.code, &event_id[..8.min(event_id.len())], r.kmh, if over { " (over limit)" } else { "" });
                 }
                 Err(e) => error!("{}: storing speed failed: {e:#}", self.source.code),
@@ -166,7 +180,8 @@ impl EventDecider {
             let event_id = tx.insert_event(&NewEvent {
                 source_id: &src.id, incident_id: incident_id.as_deref(), label: &t.label,
                 confidence: (t.score * 10_000.0).round() / 10_000.0, severity: &cat.severity, track_id: t.track_id, bbox,
-                title: &title, detected_at: now,
+                title: &title, detected_at: now, cls_label: classify_label(&t.label),
+                pipeline: if (self.needs_check)(&t.label) { "queued" } else { "ready" },
             })?;
             tx.insert_snapshot(&event_id, snap, Some(&bbox), 0, 0)?;
             if let Some(inc) = &incident_id {
@@ -177,6 +192,7 @@ impl EventDecider {
             Ok(())
         })?;
         let rec = rec.expect("transaction ran");
+        crate::automation::notify(&rec.event_id);
         info!(
             "{}: event {} {} {:.2} track={} incident={}{}", src.code, &rec.event_id[..8.min(rec.event_id.len())], t.label, t.score,
             t.track_id, rec.incident_code.as_deref().or(rec.incident_id.as_deref()).unwrap_or("-"), if rec.grouped { " (grouped)" } else { "" }
@@ -200,7 +216,7 @@ mod tests {
 
     fn setup() -> (Arc<FakeRepo>, EventDecider, HashMap<String, Category>) {
         let repo = Arc::new(FakeRepo::default());
-        let dec = EventDecider::new(repo.clone(), source(&["person", "car"], 0.4));
+        let dec = EventDecider::new(repo.clone(), source(&["person", "car"], 0.4), Arc::new(|l: &str| l == "person"));
         let cats = HashMap::from([
             ("person".to_string(), cat("person", "HIGH", true, 30)),
             ("car".to_string(), cat("car", "MEDIUM", true, 60)),
@@ -315,5 +331,20 @@ mod tests {
         assert_eq!(r[0].track_id, 2, "only the new track breaks through the 30 s cooldown");
         assert!(d.process(&[tr("person", 1, 0.9)], &cats, &snap, t0 + Duration::seconds(12)).is_empty(), "a reported track waits for the cooldown");
         assert_eq!(repo.state().events.len(), 2);
+    }
+
+    #[test]
+    fn the_camera_ai_classifies_every_event_and_only_queues_those_with_questions_to_answer() {
+        let (repo, mut d, cats) = setup();
+        let now = Utc::now();
+        for label in ["person", "car"] {
+            d.process(&[tr(label, 1, 0.9)], &cats, &snap, now);
+            d.process(&[tr(label, 1, 0.9)], &cats, &snap, now);
+        }
+        let s = repo.state();
+        let by = |l: &str| s.events.values().find(|e| e.label == l).unwrap().clone();
+        assert_eq!((by("person").cls_label.as_deref(), by("person").pipeline.as_str()), (Some("person"), "queued"));
+        assert_eq!((by("car").cls_label.as_deref(), by("car").pipeline.as_str()), (Some("vehicle"), "ready"));
+        assert_eq!(classify_label("dog"), "other");
     }
 }
