@@ -6,8 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 export FEED_STREAMS=dock2 COMPOSE_PROJECT_NAME=eyeai-e2e
-# E2E_CLASSIFIER=1 (default) also starts Ollama + the d1 model and asserts server-side classification
-E2E_CLASSIFIER=${E2E_CLASSIFIER:-1}
+# The camera AI classifies events itself, so the e2e needs no second model. E2E_CLASSIFIER=1 additionally starts Ollama + the d1 model
+# (3.7 GB download) to exercise the optional second AI check.
+E2E_CLASSIFIER=${E2E_CLASSIFIER:-0}
 PROFILES=(--profile dev)
 if [ "$E2E_CLASSIFIER" = 1 ]; then PROFILES+=(--profile classifier); export CLASSIFIER_URL=http://classifier:11434 E2E_CLASSIFIER; fi
 scripts/fetch_assets.sh e2e

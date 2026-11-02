@@ -84,7 +84,7 @@ try {
   });
 
   const ev = await step("detections reach triage with a bounding box and snapshot", async () => {
-    for (let i = 0; i < 240; i++) {   // (8 min) with the classifier on, an event only reaches triage after ~30 s of CPU classification
+    for (let i = 0; i < 120; i++) {
       const { events } = await (await sec.request.get(`${BASE}/api/events?tab=needs_review`)).json();
       const e = events.find((x) => x.source_id === sourceId && x.bbox && x.snapshots > 0);
       if (e) { console.log(`     ${e.label} ${e.confidence.toFixed(2)} ${e.incident_code}`); return e; }
@@ -93,21 +93,15 @@ try {
     throw new Error("no detection arrived");
   });
 
-  if (process.env.E2E_CLASSIFIER === "1") {
-    await step("server classifier (System One d1) labels the snapshot", async () => {
-      for (let i = 0; i < 120; i++) {
-        const { events } = await (await sec.request.get(`${BASE}/api/events?tab=needs_review`)).json();
-        const e = events.find((x) => x.source_id === sourceId && x.cls_label);
-        if (e) {
-          assert(e.pipeline === "ready" && e.cls_model && e.cls_confidence > 0 && e.cls_confidence <= 1, `bad classification: ${JSON.stringify({ p: e.pipeline, m: e.cls_model, c: e.cls_confidence })}`);
-          console.log(`     edge=${e.label} classifier=${e.cls_label} ${e.cls_confidence.toFixed(2)} (${e.cls_model}, ${e.cls_ms} ms)`);
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-      throw new Error("no event was classified in time");
-    });
-  }
+  await step("the camera AI classifies the event the moment it is written", async () => {
+    const { events } = await (await sec.request.get(`${BASE}/api/events?tab=needs_review`)).json();
+    const e = events.find((x) => x.source_id === sourceId && x.cls_label);
+    assert(e, "no classified event");
+    assert(["person", "vehicle", "other"].includes(e.cls_label) && e.cls_model === "detector" && e.cls_confidence > 0 && e.cls_confidence <= 1,
+      `bad classification: ${JSON.stringify({ l: e.cls_label, m: e.cls_model, c: e.cls_confidence })}`);
+    assert(e.pipeline === "ready", `the event should be ready for triage at once, got ${e.pipeline}`);
+    console.log(`     ${e.label} -> ${e.cls_label} ${e.cls_confidence.toFixed(2)} (${e.cls_model})`);
+  });
 
   await step("snapshot burst: several frames, each with its own box, plus an indication", async () => {
     for (let i = 0; i < 40; i++) {
@@ -149,7 +143,6 @@ try {
     await sec.goto(`${BASE}/triage`);
     await sec.waitForSelector("button[aria-pressed]");
     await sec.waitForSelector("section[aria-label='Event detail'] img");
-    if (process.env.E2E_CLASSIFIER === "1") await sec.waitForSelector("text=Server classifier");
     await sec.screenshot({ path: `${OUT}/triage.png` });
     await sec.click("text=Confirm incident");
     await sec.fill("[role=dialog] textarea", "e2e: verified");
