@@ -12,12 +12,15 @@ push() { # name file
   done
 }
 
-# STREAMS: space separated subset of "dock2 gate aisle" (default: just dock2 = one stream)
+# STREAMS: space separated subset of "dock2 gate aisle burglary assault" (default: just dock2 = one stream).
+# burglary / assault play optional UCF-Crime evaluation clips from data/samples/eval-ucf (research data, not in the repo; see docs/DETECTION_CAPABILITIES.md).
 for s in ${STREAMS:-dock2}; do
   case "$s" in
     dock2) push dock2 person-bicycle-car-detection.mp4 & ;;
     gate)  push gate  car-detection.mp4 & ;;
     aisle) push aisle store-aisle-detection.mp4 & ;;
+    burglary) push burglary eval-ucf/Burglary078_x264.mp4 & ;;
+    assault)  push assault  eval-ucf/Assault018_x264.mp4 & ;;
   esac
 done
 wait
