@@ -27,6 +27,10 @@ Per-camera columns that already exist stay where they are: `sources.labels`, `so
     "max_age":       10,    // 0 .. 60      analysed frames a track survives without a match
     "min_hits":      2      // 1 .. 10      frames a track must be seen before it can become an event
   },
+  "events": {
+    "new_track_gap_s": 0      // 0 .. 300   0 = off. A track that never produced an event may open one this many seconds after the
+                              //            last event of its label even while the category cooldown runs (see "Events and cooldown")
+  },
   "calibration": {
     "method":          "none",   // "none" | "line" | "homography"
     "speed_limit_kmh": 50,       // 5 .. 300     faster tracks are flagged "Over speed limit"
@@ -44,6 +48,33 @@ Per-camera columns that already exist stay where they are: `sources.labels`, `so
   }
 }
 ```
+
+## Classifier tuning (global only)
+
+Read from `engine_settings 'defaults'` under `classifier` (a per-camera `classifier` key is ignored: one classifier loop serves all
+cameras). The environment variables `CLASSIFIER_*` are the fallback when a key is unset. Applies within 30 s, no restart.
+
+```jsonc
+{ "classifier": {
+    "rules_enabled": true,  // false: only the person / vehicle / false_alarm class is asked, no behaviour rules
+    "rule_frames":   1,     // 1 .. 6    behaviour rules look at the first N snapshots of the burst, the highest probability wins
+    "rule_max_queue": 10,   // 0 .. 200  rules are skipped while more events than this wait for the classifier
+    "batch":         false  // true: all rule questions in one request (faster; Ollama d1 on CPU crashes with 2+ questions)
+} }
+```
+
+## Categories
+
+`categories` (title, severity, opens_incident, cooldown_s, enabled, burst_s, burst_frames) is edited from the dashboard too
+(Rules page, admin only; `PUT /api/categories/<label>`): title 1..60 chars, severity CRITICAL|HIGH|MEDIUM|LOW, cooldown_s 0..86400,
+burst_s 0..60 (0 = single snapshot), burst_frames 1..12. The worker reads categories every poll.
+
+## Events and cooldown
+
+An event is written for a label on a camera at most once per `categories.cooldown_s`, except that a track that has never been
+reported may open one after `events.new_track_gap_s` (default 0 = off). Without it a second person who arrives 10 s after the first
+is not reported until the 30 s cooldown has passed. Turn it on (5-10 s) where that matters, at the price of more events when the
+tracker hands out new ids to the same person.
 
 ## Hot reload
 
