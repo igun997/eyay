@@ -2,9 +2,11 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { SourceRow } from "@/lib/types";
+import { useT } from "@/lib/i18n/client";
 
 /** Live picture with boxes drawn on it. Shows NO SIGNAL when the camera is not online or the picture fails. */
 export function LiveStream({ source, className, compact }: { source: Pick<SourceRow, "id" | "status" | "code" | "name" | "kind">; className?: string; compact?: boolean }) {
+  const t = useT();
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
   const live = source.status === "online" && !failed;
@@ -26,17 +28,17 @@ export function LiveStream({ source, className, compact }: { source: Pick<Source
     <div className={cn("relative aspect-video overflow-hidden rounded-sm bg-black", className)}>
       {live ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img key={`${source.id}-${nonce}`} src={compact ? `/api/live/${source.id}?mode=snapshot&t=${tick}` : `/api/live/${source.id}?n=${nonce}`} alt={`Live ${source.code}`} className="size-full object-contain" onError={() => setFailed(true)} />
+        <img key={`${source.id}-${nonce}`} src={compact ? `/api/live/${source.id}?mode=snapshot&t=${tick}` : `/api/live/${source.id}?n=${nonce}`} alt={t("liveStream.alt", { code: source.code })} className="size-full object-contain" onError={() => setFailed(true)} />
       ) : (
-        <div className="flex size-full items-center justify-center font-mono text-xs tracking-[0.2em] text-text-3">NO SIGNAL</div>
+        <div className="flex size-full items-center justify-center font-mono text-xs tracking-[0.2em] text-text-3">{t("liveStream.noSignal")}</div>
       )}
       {!compact && (
         <>
           <div className="absolute top-3 left-3 flex items-center gap-2 rounded-sm bg-black/70 px-2.5 py-1 font-mono text-xs">
             <span className="font-semibold">{source.code}</span><span className="text-text-2">{source.name}</span>
-            {live && <span className="flex items-center gap-1 font-semibold"><span className="size-1.5 animate-pulse rounded-full bg-sev-critical" />LIVE</span>}
+            {live && <span className="flex items-center gap-1 font-semibold"><span className="size-1.5 animate-pulse rounded-full bg-sev-critical" />{t("liveStream.live")}</span>}
           </div>
-          <div className="absolute top-3 right-3 rounded-sm bg-black/70 px-2.5 py-1 font-mono text-[11px] tracking-wider text-text-2">{source.kind === "rtsp" ? "CAMERA STREAM" : "WEB STREAM"}</div>
+          <div className="absolute top-3 right-3 rounded-sm bg-black/70 px-2.5 py-1 font-mono text-[11px] tracking-wider text-text-2">{source.kind === "rtsp" ? t("liveStream.cameraStream") : t("liveStream.webStream")}</div>
         </>
       )}
     </div>

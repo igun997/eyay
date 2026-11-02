@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { kindOf, sourceInput, reviewInput } from "@/lib/schemas";
 import { can } from "@/lib/roles";
-import { ago, agoText } from "@/lib/format";
+import { fmtAgo } from "@/lib/i18n";
 import { agreement } from "@/lib/classification";
 import { maskCreds } from "@/lib/server/queries";
 
@@ -52,15 +52,14 @@ describe("roles", () => {
 
 describe("format + masking", () => {
   const now = Date.parse("2026-10-31T12:00:00Z");
-  it("ago", () => {
-    expect(ago("2026-10-31T11:59:58Z", now)).toBe("now");
-    expect(ago("2026-10-31T11:59:00Z", now)).toBe("1m");
-    expect(ago("2026-10-31T10:38:00Z", now)).toBe("1h 22m");
-    expect(ago(null, now)).toBe("never");
-  });
-  it("agoText never produces \"now ago\"", () => {
-    expect(agoText(new Date().toISOString())).toBe("now");
-    expect(agoText(new Date(Date.now() - 5 * 60000).toISOString())).toBe("5m ago");
+  it("relative times follow the language and never say \"now ago\"", () => {
+    const now = Date.parse("2026-10-31T12:00:00Z");
+    expect(fmtAgo("en", "2026-10-31T11:59:58Z", now)).toBe("now");
+    expect(fmtAgo("id", "2026-10-31T11:59:58Z", now)).toBe("baru saja");
+    expect(fmtAgo("en", "2026-10-31T11:55:00Z", now)).toMatch(/5 min/);
+    expect(fmtAgo("id", "2026-10-31T11:55:00Z", now)).toMatch(/5 mnt|5 menit/);
+    expect(fmtAgo("en", null)).toBe("never");
+    expect(fmtAgo("id", null)).toBe("belum pernah");
   });
   it("maskCreds hides the password but keeps user and host", () => {
     expect(maskCreds({ url: "rtsp://admin:s3cret@10.0.0.5/s" }).url).toBe("rtsp://admin:••••@10.0.0.5/s");

@@ -10,9 +10,9 @@ export const PUT = route<{ key: string }>(async (req, { params }) => {
   const v = normaliseRule(await body(req, ruleUpdate));
   const known = new Set((await listCategories()).map((c) => c.label));
   const bad = v.applies_to.filter((l) => !known.has(l));
-  if (bad.length) throw new HttpError(400, `applies_to: unknown categories ${bad.join(", ")}`);
+  if (bad.length) throw new HttpError(400, "err.unknownCategories", { list: bad.join(", ") });
   const row = await updateBehaviorRule(key, { ...v, question: v.question ?? null });
-  if (!row) throw new HttpError(404, "Rule not found");
+  if (!row) throw new HttpError(404, "err.ruleNotFound");
   await query("INSERT INTO audit_log (user_id, action, target) VALUES ($1,'rule.update',$2)", [u.uid, key]);
   return row;
 });
@@ -20,7 +20,7 @@ export const PUT = route<{ key: string }>(async (req, { params }) => {
 export const DELETE = route<{ key: string }>(async (_req, { params }) => {
   const u = await requireSession(["admin"]);
   const key = ruleKey.parse((await params).key);
-  if (!(await deleteBehaviorRule(key))) throw new HttpError(404, "Rule not found");
+  if (!(await deleteBehaviorRule(key))) throw new HttpError(404, "err.ruleNotFound");
   await query("INSERT INTO audit_log (user_id, action, target) VALUES ($1,'rule.delete',$2)", [u.uid, key]);
   return { ok: true };
 });

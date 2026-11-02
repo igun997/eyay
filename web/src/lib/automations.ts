@@ -1,5 +1,7 @@
 // Alerts and automations contract: docs/AUTOMATIONS.md. Pure (no server imports): the builder and the API share these rules.
 import { z } from "zod";
+import { DEFAULT_LANG, makeT, tOr, type MessageKey, type T } from "./i18n";
+import { issueLine } from "./i18n/validation";
 
 export const SECRET_MASK = "********";
 export const KINDS = ["webhook", "mqtt", "modbus"] as const;
@@ -7,16 +9,16 @@ export type ConnectionKind = (typeof KINDS)[number];
 export const SEVERITY_ORDER = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
 export const CLASSIFIED_AS = ["person", "vehicle", "false_alarm", "other"] as const;
 
-const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "Not a valid id");
-const host = z.string().trim().min(1).max(253).regex(/^[A-Za-z0-9._-]+$/, "Use a host name or an IP address");
+const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "v.notAValidId");
+const host = z.string().trim().min(1).max(253).regex(/^[A-Za-z0-9._-]+$/, "v.useAHostNameOr");
 const port = (d: number) => z.number().int().min(1).max(65535).default(d);
 const timeout = z.number().int().min(1).max(30).default(5);
 
 // ---- connections ----------------------------------------------------------------------------------------------------
 export const webhookConfig = z.object({
-  url: z.string().trim().max(500).regex(/^https?:\/\/[^\s]+$/i, "Use an http:// or https:// address"),
+  url: z.string().trim().max(500).regex(/^https?:\/\/[^\s]+$/i, "v.useAnHttpOrHttps"),
   method: z.enum(["POST", "PUT"]).default("POST"),
-  headers: z.record(z.string().regex(/^[A-Za-z0-9-]{1,60}$/, "Header names use letters, digits and -"), z.string().max(500)).default({}),
+  headers: z.record(z.string().regex(/^[A-Za-z0-9-]{1,60}$/, "v.headerNamesUseLettersDigits"), z.string().max(500)).default({}),
   secret: z.string().max(200).optional(),
   timeout_s: timeout,
 }).strict();
@@ -36,7 +38,7 @@ export const connectionInput = z.object({
 }).strict();
 export const connectionPatch = z.object({
   name: z.string().trim().min(1).max(80), config: z.record(z.string(), z.unknown()), enabled: z.boolean(),
-}).partial().strict().refine((v) => Object.keys(v).length > 0, "Nothing to update");
+}).partial().strict().refine((v) => Object.keys(v).length > 0, "v.nothingToUpdate");
 
 export type StoredConfig = Record<string, unknown>;
 
@@ -68,13 +70,13 @@ export function mergeSecrets(kind: ConnectionKind, stored: StoredConfig, incomin
   return out;
 }
 
-export function parseConnectionConfig(kind: ConnectionKind, config: unknown): { ok: true; config: StoredConfig } | { ok: false; errors: string[] } {
+export function parseConnectionConfig(kind: ConnectionKind, config: unknown, t: T = makeT(DEFAULT_LANG)): { ok: true; config: StoredConfig } | { ok: false; errors: string[] } {
   const r = CONFIG_BY_KIND[kind].safeParse(config);
-  return r.success ? { ok: true, config: r.data as StoredConfig } : { ok: false, errors: r.error.issues.map((i) => `config.${i.path.join(".")}: ${i.message}`.replace(/\.:/, ":")) };
+  return r.success ? { ok: true, config: r.data as StoredConfig } : { ok: false, errors: r.error.issues.map((i) => issueLine(t, i)) };
 }
 
 // ---- conditions -----------------------------------------------------------------------------------------------------
-const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM");
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "v.useHhMm");
 export const conditionSchema = z.discriminatedUnion("field", [
   z.object({ field: z.literal("camera"), in: z.array(uuid).min(1).max(100) }).strict(),
   z.object({ field: z.literal("label"), in: z.array(z.string().min(1).max(40)).min(1).max(40) }).strict(),
@@ -92,14 +94,14 @@ const template = z.string().max(4000);
 const address = z.number().int().min(0).max(65535);
 export const actionSchema = z.union([
   z.object({ type: z.literal("webhook"), connection: uuid, body: template.optional() }).strict(),
-  z.object({ type: z.literal("mqtt"), connection: uuid, topic: z.string().trim().min(1).max(200).regex(/^[^+#\s]+$/, "A topic to publish to has no spaces, + or #"), payload: template.optional(), retain: z.boolean().default(false) }).strict(),
+  z.object({ type: z.literal("mqtt"), connection: uuid, topic: z.string().trim().min(1).max(200).regex(/^[^+#\s]+$/, "v.aTopicToPublishTo"), payload: template.optional(), retain: z.boolean().default(false) }).strict(),
   z.object({ type: z.literal("modbus"), connection: uuid, function: z.literal("write_coil"), address, hold_s: z.number().int().min(1).max(60) }).strict(),
   z.object({ type: z.literal("modbus"), connection: uuid, function: z.literal("write_register"), address, value: z.number().int().min(0).max(65535) }).strict(),
 ]);
 export type Action = z.infer<typeof actionSchema>;
 
 const liveNeedsConfirm = (v: { mode?: string; confirm_live?: boolean }) => v.mode !== "live" || v.confirm_live === true;
-const liveMsg = { path: ["confirm_live"], message: "Going live needs confirm_live: true" };
+const liveMsg = { path: ["confirm_live"], message: "v.goingLiveNeedsConfirmLive" };
 // no defaults here: the patch schema is built from these, and a default would silently reset fields that were not sent
 const automationFields = {
   name: z.string().trim().min(1).max(80),
@@ -107,7 +109,7 @@ const automationFields = {
   enabled: z.boolean(),
   mode: z.enum(["simulate", "live"]),
   conditions: z.array(conditionSchema).max(20),
-  actions: z.array(actionSchema).min(1, "Add at least one action").max(10),
+  actions: z.array(actionSchema).min(1, "v.addAtLeastOneAction").max(10),
   cooldown_s: z.number().int().min(0).max(86400),
   max_per_hour: z.number().int().min(1).max(1000),
   position: z.number().int().min(0).max(1000),
@@ -122,64 +124,58 @@ export const automationInput = z.object({
 }).strict().refine(liveNeedsConfirm, liveMsg);
 /** Update: only the fields that are sent change. */
 export const automationPatch = z.object(automationFields).partial().strict()
-  .refine((v) => Object.keys(v).length > 0, "Nothing to update")
+  .refine((v) => Object.keys(v).length > 0, "v.nothingToUpdate")
   .refine(liveNeedsConfirm, liveMsg);
 
-/** Every action must name an enabled connection of the matching kind. Returns messages. */
-export function checkActionConnections(actions: Action[], connections: { id: string; kind: string; enabled: boolean; name?: string }[]): string[] {
+/** Every action must name an enabled connection of the matching kind. Returns messages in the language of `t`. */
+export function checkActionConnections(actions: Action[], connections: { id: string; kind: string; enabled: boolean; name?: string }[], t: T = makeT(DEFAULT_LANG)): string[] {
   const errs: string[] = [];
   actions.forEach((a, i) => {
     const c = connections.find((x) => x.id === a.connection);
-    if (!c) errs.push(`actions.${i}: that connection does not exist`);
-    else if (c.kind !== a.type) errs.push(`actions.${i}: ${c.name ?? "that connection"} is a ${c.kind} connection, not ${a.type}`);
-    else if (!c.enabled) errs.push(`actions.${i}: ${c.name ?? "that connection"} is switched off`);
+    const n = i + 1;
+    if (!c) errs.push(t("automations.noConnection", { n }));
+    else if (c.kind !== a.type) errs.push(t("automations.kindMismatch", { n, name: c.name ?? t("automations.thatConnection"), kind: c.kind, type: a.type }));
+    else if (!c.enabled) errs.push(t("automations.switchedOff", { n, name: c.name ?? t("automations.thatConnection") }));
   });
   return errs;
 }
 
 // ---- template names -------------------------------------------------------------------------------------------------
 /** Names the worker replaces in `{{name}}` (docs/AUTOMATIONS.md), with the plain label shown in the "Insert detail" picker. */
-export const TEMPLATE_NAMES: { name: string; label: string }[] = [
-  { name: "event.label", label: "What was seen" }, { name: "event.severity", label: "How serious" }, { name: "event.title", label: "Event title" },
-  { name: "event.code", label: "Event number" }, { name: "event.detected_at", label: "When it happened" }, { name: "event.speed_kmh", label: "Speed (km/h)" },
-  { name: "event.suspicious", label: "Marked suspicious" }, { name: "event.classified_as", label: "What the AI says it is" },
-  { name: "event.indicators", label: "Warning signs" }, { name: "event.id", label: "Event id" },
-  { name: "camera.name", label: "Camera name" }, { name: "camera.code", label: "Camera code" }, { name: "camera.id", label: "Camera id" },
-  { name: "incident.code", label: "Incident number" }, { name: "automation.name", label: "Alert name" }, { name: "mode", label: "Practice or live" },
-];
+export const TEMPLATE_NAMES: { name: string; label: MessageKey }[] = [
+  "event.label", "event.severity", "event.title", "event.code", "event.detected_at", "event.speed_kmh", "event.suspicious", "event.classified_as", "event.indicators", "event.id",
+  "camera.name", "camera.code", "camera.id", "incident.code", "automation.name", "mode",
+].map((name) => ({ name, label: `tpl.${name}` as MessageKey }));
 
 // ---- plain-language description -------------------------------------------------------------------------------------
 type Named = { id: string; code?: string; name: string };
-const list = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} or ${xs[xs.length - 1]}`);
-export const LABEL_WORDS: Record<string, string> = { person: "a person", car: "a car", truck: "a truck", bus: "a bus", motorcycle: "a motorcycle", bicycle: "a bicycle" };
-const SEV_WORD: Record<string, string> = { LOW: "low", MEDIUM: "medium", HIGH: "high", CRITICAL: "critical" };
-const AI_WORD: Record<string, string> = { person: "a person", vehicle: "a vehicle", false_alarm: "not a real detection", other: "another kind of object" };
+const list = (t: T, xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")}${t("desc.or")}${xs[xs.length - 1]}`);
 
-export function describeCondition(c: Condition, cameras: Named[] = [], rules: { key: string; title: string }[] = []): string {
+export function describeCondition(c: Condition, cameras: Named[] = [], rules: { key: string; title: string }[] = [], t: T = makeT(DEFAULT_LANG)): string {
   switch (c.field) {
-    case "camera": return `it is on ${list(c.in.map((id) => cameras.find((s) => s.id === id)?.name ?? "a removed camera"))}`;
-    case "label": return `it sees ${list(c.in.map((l) => LABEL_WORDS[l] ?? `a ${l}`))}`;
-    case "severity": return `it is at least ${SEV_WORD[c.at_least]} priority`;
-    case "indicator": return c.triggered === "*" ? "any warning sign appeared" : `the warning sign “${rules.find((r) => r.key === c.triggered)?.title ?? c.triggered}” appeared`;
-    case "classified_as": return `the AI check says it is ${AI_WORD[c.is]}`;
-    case "speed_kmh": return `it moves faster than ${c.above} km/h`;
-    case "suspicious": return c.is ? "it is marked suspicious" : "it is not marked suspicious";
-    case "time": return `the time is between ${c.between[0]} and ${c.between[1]}`;
+    case "camera": return t("desc.camera", { names: list(t, c.in.map((id) => cameras.find((s) => s.id === id)?.name ?? t("desc.removedCamera"))) });
+    case "label": return t("desc.label", { names: list(t, c.in.map((l) => tOr(t, `desc.label.${l}`, l))) });
+    case "severity": return t("desc.severity", { level: t(`desc.sev.${c.at_least}`) });
+    case "indicator": return c.triggered === "*" ? t("desc.indicatorAny") : t("desc.indicator", { title: rules.find((r) => r.key === c.triggered)?.title ?? c.triggered });
+    case "classified_as": return t("desc.classified", { what: t(`desc.ai.${c.is}`) });
+    case "speed_kmh": return t("desc.speed", { n: c.above });
+    case "suspicious": return c.is ? t("desc.suspicious") : t("desc.notSuspicious");
+    case "time": return t("desc.time", { a: c.between[0], b: c.between[1] });
   }
 }
 
-export function describeAction(a: Action, connections: { id: string; name: string }[] = []): string {
-  const where = connections.find((c) => c.id === a.connection)?.name ?? "a removed connection";
-  if (a.type === "webhook") return `send a message to ${where}`;
-  if (a.type === "mqtt") return `publish a message on “${a.topic}” via ${where}`;
-  return a.function === "write_coil" ? `switch output ${a.address} on for ${a.hold_s} s on ${where}` : `write the value ${a.value} to register ${a.address} on ${where}`;
+export function describeAction(a: Action, connections: { id: string; name: string }[] = [], t: T = makeT(DEFAULT_LANG)): string {
+  const where = connections.find((c) => c.id === a.connection)?.name ?? t("desc.removedConnection");
+  if (a.type === "webhook") return t("desc.webhook", { where });
+  if (a.type === "mqtt") return t("desc.mqtt", { topic: a.topic, where });
+  return a.function === "write_coil" ? t("desc.coil", { address: a.address, hold: a.hold_s, where }) : t("desc.register", { value: a.value, address: a.address, where });
 }
 
-/** “When it sees a person and it is at least high priority, then send a message to Plant.” */
-export function describeAutomation(conds: Condition[], actions: Action[], cameras: Named[] = [], connections: { id: string; name: string }[] = [], rules: { key: string; title: string }[] = []): string {
-  const when = conds.length ? conds.map((c) => describeCondition(c, cameras, rules)).join(" and ") : "any event happens";
-  const then = actions.length ? actions.map((a) => describeAction(a, connections)).join(", then ") : "do nothing yet";
-  return `When ${when}, then ${then}.`;
+/** “When it sees a person and it is at least high priority, then send a message to Plant.” in the language of `t`. */
+export function describeAutomation(conds: Condition[], actions: Action[], cameras: Named[] = [], connections: { id: string; name: string }[] = [], rules: { key: string; title: string }[] = [], t: T = makeT(DEFAULT_LANG)): string {
+  const when = conds.length ? conds.map((c) => describeCondition(c, cameras, rules, t)).join(t("desc.and")) : t("desc.anyEvent");
+  const then = actions.length ? actions.map((a) => describeAction(a, connections, t)).join(t("desc.then")) : t("desc.nothingYet");
+  return t("desc.sentence", { when, then });
 }
 
 // ---- tests that wait for the analysis service -----------------------------------------------------------------------

@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/hooks/use-api";
+import { useT } from "@/lib/i18n/client";
 
 export function LoginForm() {
+  const t = useT();
   const router = useRouter();
   const next = useSearchParams().get("next");
   const [email, setEmail] = useState("");
@@ -32,19 +34,19 @@ export function LoginForm() {
     <form onSubmit={submit} className="space-y-4" noValidate>
       {error && <p role="alert" className="rounded-sm border border-sev-critical/40 bg-sev-critical/10 px-3 py-2 text-sm text-sev-critical">{error}</p>}
       <div className="space-y-2">
-        <Label htmlFor="email">Work email</Label>
-        <Input id="email" type="email" autoComplete="username" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} className="h-10 border-border-strong bg-background" aria-invalid={!!error} />
+        <Label htmlFor="email">{t("login.workEmail")}</Label>
+        <Input id="email" type="email" autoComplete="username" placeholder={t("login.nameCompanyCom")} value={email} onChange={(e) => setEmail(e.target.value)} className="h-10 border-border-strong bg-background" aria-invalid={!!error} />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="password">Password</Label>
+        <Label htmlFor="password">{t("login.password")}</Label>
         <div className="relative">
-          <Input id="password" type={show ? "text" : "password"} autoComplete="current-password" placeholder="Enter your password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-10 border-border-strong bg-background pr-10" aria-invalid={!!error} />
-          <button type="button" aria-label={show ? "Hide password" : "Show password"} onClick={() => setShow((s) => !s)} className="absolute top-1/2 right-3 -translate-y-1/2 text-text-2">
+          <Input id="password" type={show ? "text" : "password"} autoComplete="current-password" placeholder={t("login.enterYourPassword")} value={password} onChange={(e) => setPassword(e.target.value)} className="h-10 border-border-strong bg-background pr-10" aria-invalid={!!error} />
+          <button type="button" aria-label={show ? t("login.hidePassword") : t("login.showPassword")} onClick={() => setShow((s) => !s)} className="absolute top-1/2 right-3 -translate-y-1/2 text-text-2">
             {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
           </button>
         </div>
       </div>
-      <Button type="submit" disabled={busy || !email || !password} className="h-10 w-full font-semibold">Sign in</Button>
+      <Button type="submit" disabled={busy || !email || !password} className="h-10 w-full font-semibold">{t("login.signIn")}</Button>
     </form>
   );
 }

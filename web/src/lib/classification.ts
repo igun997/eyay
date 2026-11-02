@@ -11,7 +11,8 @@ export function agreement(edgeLabel: string, cls: ClsLabel | null): Agreement {
   return cls === expected ? "agree" : "disagree";
 }
 
-export const clsLabelText: Record<ClsLabel, string> = { person: "person", vehicle: "vehicle", false_alarm: "not a real detection", other: "Other object" };
+/** The catalog key of what the AI said, for t(). */
+export const clsLabelKey = (l: ClsLabel) => `label.${l}` as const;
 
 /** `events.cls_model` is "detector" when the camera AI itself classified the event; anything else is the optional second AI check. */
 export const isSecondCheck = (model: string | null | undefined) => !!model && model !== "detector";

@@ -1,3 +1,4 @@
+import { tFromRequest } from "@/lib/i18n";
 import { route, body } from "@/lib/server/http";
 import { requireSession, HttpError } from "@/lib/server/auth";
 import { deleteAutomation, getAutomation, listConnections, updateAutomation } from "@/lib/server/automations";
@@ -10,12 +11,12 @@ const isId = (id: string) => /^[0-9a-f-]{36}$/i.test(id);
 export const PUT = route<{ id: string }>(async (req, { params }) => {
   const u = await requireSession(["admin"]);
   const { id } = await params;
-  if (!isId(id)) throw new HttpError(400, "Bad id");
+  if (!isId(id)) throw new HttpError(400, "err.badId");
   const { confirm_live, ...v } = await body(req, automationPatch);
   const cur = await getAutomation(id);
-  if (!cur) throw new HttpError(404, "Alert not found");
+  if (!cur) throw new HttpError(404, "err.alertNotFound");
   if (v.actions) {
-    const errs = checkActionConnections(v.actions, await listConnections());
+    const errs = checkActionConnections(v.actions, await listConnections(), tFromRequest(req));
     if (errs.length) throw new HttpError(400, errs.join("; "));
   }
   const row = await updateAutomation(id, v);
@@ -27,9 +28,9 @@ export const PUT = route<{ id: string }>(async (req, { params }) => {
 export const DELETE = route<{ id: string }>(async (_req, { params }) => {
   const u = await requireSession(["admin"]);
   const { id } = await params;
-  if (!isId(id)) throw new HttpError(400, "Bad id");
+  if (!isId(id)) throw new HttpError(400, "err.badId");
   const row = await deleteAutomation(id);
-  if (!row) throw new HttpError(404, "Alert not found");
+  if (!row) throw new HttpError(404, "err.alertNotFound");
   await query("INSERT INTO audit_log (user_id, action, target) VALUES ($1,'automation.delete',$2)", [u.uid, row.name]);
   return { ok: true };
 });

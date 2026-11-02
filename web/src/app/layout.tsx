@@ -2,16 +2,24 @@ import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Toaster } from "@/components/ui/sonner";
+import { LangProvider } from "@/lib/i18n/client";
+import { getLang, getT } from "@/lib/i18n/server";
 import "./globals.css";
 
-export const metadata: Metadata = { title: "EyeAI", description: "Event-first operations console" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT();
+  return { title: "EyeAI", description: t("meta.description") };
+}
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const lang = await getLang();
   return (
-    <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
+    <html lang={lang} className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
       <body>
-        {children}
-        <Toaster theme="dark" />
+        <LangProvider lang={lang}>
+          {children}
+          <Toaster theme="dark" />
+        </LangProvider>
       </body>
     </html>
   );

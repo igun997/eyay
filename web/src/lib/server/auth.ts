@@ -11,8 +11,9 @@ export async function getSession() {
   return verifySession((await cookies()).get(COOKIE)?.value);
 }
 
+/** `message` is a catalog key (translated for the user by route()) or, for text that is already localised, the text itself. */
 export class HttpError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public params?: Record<string, string | number>) {
     super(message);
   }
 }
@@ -20,8 +21,8 @@ export class HttpError extends Error {
 /** For route handlers: throws HttpError(401/403). */
 export async function requireSession(roles?: Role[]) {
   const s = await getSession();
-  if (!s) throw new HttpError(401, "Not signed in");
-  if (roles && !roles.includes(s.role)) throw new HttpError(403, "Not allowed for your role");
+  if (!s) throw new HttpError(401, "err.notSignedIn");
+  if (roles && !roles.includes(s.role)) throw new HttpError(403, "err.notAllowedForYourRole");
   return s;
 }
 

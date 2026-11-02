@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // the handlers are exercised for real; only the session and the database are replaced
 const session = vi.hoisted(() => ({ role: "admin" as "admin" | "security" | null }));
 vi.mock("@/lib/server/auth", () => {
-  class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
+  class HttpError extends Error { constructor(public status: number, message: string, public params?: Record<string, string | number>) { super(message); } }
   return {
     HttpError,
     requireSession: async (roles?: string[]) => {
-      if (!session.role) throw new HttpError(401, "Not signed in");
-      if (roles && !roles.includes(session.role)) throw new HttpError(403, "Not allowed for your role");
+      if (!session.role) throw new HttpError(401, "err.notSignedIn");
+      if (roles && !roles.includes(session.role)) throw new HttpError(403, "err.notAllowedForYourRole");
       return { uid: "00000000-0000-0000-0000-000000000001", email: "a@b.c", name: "A", role: session.role };
     },
   };
@@ -49,8 +49,9 @@ import { GET as listRules, POST as createRule } from "@/app/api/rules/route";
 import { PUT as updateRule, DELETE as deleteRule } from "@/app/api/rules/[key]/route";
 import { PUT as updateCategory } from "@/app/api/categories/[label]/route";
 
+const EN = { cookie: "eyeai_lang=en" }; // the handlers answer in the language of the cookie; the UI default is Indonesian
 const json = (body: unknown, method = "PUT") =>
-  new Request("http://x/api", method === "GET" || method === "DELETE" ? { method } : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  new Request("http://x/api", method === "GET" || method === "DELETE" ? { method, headers: EN } : { method, headers: { "Content-Type": "application/json", ...EN }, body: JSON.stringify(body) });
 const ID = "9ea0bb5d-faa9-4b16-a51d-d9579ba64b39";
 const ctx = <P,>(p: P) => ({ params: Promise.resolve(p) });
 const rule = { key: "knife", title: "Knife", description: "A person holds a knife.", kind: "classifier", question: "Is the person holding a knife?", applies_to: ["person"], severity: "CRITICAL" };
@@ -173,6 +174,29 @@ describe("behaviour rules API", () => {
     expect((await deleteRule(json(null, "DELETE"), ctx({ key: "knife" }))).status).toBe(200);
     expect((await deleteRule(json(null, "DELETE"), ctx({ key: "knife" }))).status).toBe(404);
     expect((await deleteRule(json(null, "DELETE"), ctx({ key: "BAD KEY" }))).status).toBe(400);
+  });
+});
+
+describe("errors are in the user's language, with a stable code", () => {
+  it("default is Indonesian; the cookie switches to English; the code never changes", async () => {
+    session.role = "security";
+    const noCookie = await putDefaults(new Request("http://x/api", { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" }), ctx({}));
+    expect(noCookie.status).toBe(403);
+    expect(await noCookie.json()).toEqual({ error: "Tidak diizinkan untuk peran Anda", code: "err.notAllowedForYourRole" });
+    const en = await putDefaults(json({}), ctx({}));
+    expect(await en.json()).toEqual({ error: "Not allowed for your role", code: "err.notAllowedForYourRole" });
+    const idCookie = await putDefaults(new Request("http://x/api", { method: "PUT", headers: { cookie: "theme=dark; eyeai_lang=id", "Content-Type": "application/json" }, body: "{}" }), ctx({}));
+    expect((await idCookie.json()).error).toBe("Tidak diizinkan untuk peran Anda");
+  });
+  it("validation errors are localised too, with code 'validation'", async () => {
+    const res = await putDefaults(new Request("http://x/api", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ detector: { nms_iou: 2 } }) }), ctx({}));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/Gabungkan kotak yang tumpang tindih: Maksimal 0.9/);
+  });
+  it("the defaults accept the automatic text language; a camera does not", async () => {
+    expect((await putDefaults(json({ language: "en" }), ctx({}))).status).toBe(200);
+    expect(db.saved.at(-1)).toEqual({ language: "en" });
+    expect((await putSourceConfig(json({ language: "en" }), ctx({ id: ID }))).status).toBe(400);
   });
 });
 

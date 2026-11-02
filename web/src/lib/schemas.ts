@@ -9,15 +9,15 @@ export function kindOf(url: string): "rtsp" | "m3u8" | null {
 
 export const sourceInput = z
   .object({
-    code: z.string().trim().min(2).max(24).regex(/^[A-Za-z0-9_-]+$/, "Letters, digits, - and _ only").transform((s) => s.toUpperCase()),
+    code: z.string().trim().min(2).max(24).regex(/^[A-Za-z0-9_-]+$/, "v.lettersDigitsAndOnly").transform((s) => s.toUpperCase()),
     name: z.string().trim().min(1).max(80),
     url: z.string().trim().min(8).max(500),
-    labels: z.array(z.string().min(1)).min(1, "Pick at least one category"),
+    labels: z.array(z.string().min(1)).min(1, "v.pickAtLeastOneCategory"),
     min_confidence: z.number().min(0.05).max(0.95).default(0.4),
     enabled: z.boolean().default(true),
   })
   .superRefine((v, ctx) => {
-    if (!kindOf(v.url)) ctx.addIssue({ code: "custom", path: ["url"], message: "Use a camera address starting with rtsp://, or a web address (http or https) ending in .m3u8" });
+    if (!kindOf(v.url)) ctx.addIssue({ code: "custom", path: ["url"], message: "v.useACameraAddressStarting" });
   })
   .transform((v) => ({ ...v, kind: kindOf(v.url)! }));
 
@@ -32,11 +32,13 @@ export const sourcePatch = z.object({
 export const userInput = z.object({
   email: z.string().email(),
   name: z.string().trim().min(1).max(80),
-  password: z.string().min(8, "At least 8 characters"),
+  password: z.string().min(8, "v.atLeast8Characters"),
   role: z.enum(["admin", "security"]),
 });
 
 export const dismissReasons = ["Shadow or lighting", "Animal", "Known person or vehicle", "Other"] as const;
+/** Dismiss reasons are stored in English (stable values); this maps them to catalog keys for display. */
+export const dismissReasonKey = { "Shadow or lighting": "dismiss.shadow", Animal: "dismiss.animal", "Known person or vehicle": "dismiss.known", Other: "dismiss.other" } as const;
 export const reviewInput = z.discriminatedUnion("decision", [
   z.object({ decision: z.literal("confirm"), note: z.string().max(500).optional() }),
   z.object({ decision: z.literal("dismiss"), reason: z.enum(dismissReasons) }),
@@ -66,7 +68,7 @@ const ruleBase = z.object({
   description: z.string().trim().min(1).max(300),
   kind: z.enum(ruleKinds),
   question: z.string().trim().min(8).max(300).nullish(),
-  applies_to: z.array(z.string().min(1)).min(1, "Pick at least one category"),
+  applies_to: z.array(z.string().min(1)).min(1, "v.pickAtLeastOneCategory"),
   threshold: z.number().gt(0).max(1).default(0.75),
   config: ruleConfig.default({}),
   severity: z.enum(severities),
@@ -76,12 +78,12 @@ const ruleBase = z.object({
 });
 
 const ruleChecks = (v: z.infer<typeof ruleBase>, ctx: z.RefinementCtx) => {
-  if (v.kind === "classifier" && !v.question) ctx.addIssue({ code: "custom", path: ["question"], message: "A second-AI-check rule needs the yes/no question to ask" });
-  if (v.kind === "indication" && !v.config.indication_kind) ctx.addIssue({ code: "custom", path: ["config", "indication_kind"], message: "An activity-pattern rule needs the activity it reacts to" });
-  if (v.kind === "object" && !v.config.objects?.length) ctx.addIssue({ code: "custom", path: ["config", "objects"], message: "Pick at least one object to look for" });
+  if (v.kind === "classifier" && !v.question) ctx.addIssue({ code: "custom", path: ["question"], message: "v.aSecondAiCheckRule" });
+  if (v.kind === "indication" && !v.config.indication_kind) ctx.addIssue({ code: "custom", path: ["config", "indication_kind"], message: "v.anActivityPatternRuleNeeds" });
+  if (v.kind === "object" && !v.config.objects?.length) ctx.addIssue({ code: "custom", path: ["config", "objects"], message: "v.pickAtLeastOneObject" });
 };
 
-export const ruleKey = z.string().regex(/^[a-z0-9_]{2,40}$/, "2-40 characters: lowercase letters, digits and _");
+export const ruleKey = z.string().regex(/^[a-z0-9_]{2,40}$/, "v.240CharactersLowercaseLetters");
 /** Create: the key is chosen once and never changes. */
 export const ruleInput = ruleBase.extend({ key: ruleKey }).superRefine(ruleChecks);
 /** Update: full replacement of everything but the key (taken from the URL). */
@@ -98,7 +100,7 @@ export const normaliseRule = <T extends z.infer<typeof ruleBase>>(v: T) => ({
 });
 
 // ---- categories (docs/ENGINE_CONFIG.md "Categories") ------------------------------------------------------------------
-export const categoryLabel = z.string().regex(/^[a-z][a-z0-9 _-]{0,39}$/, "Unknown category");
+export const categoryLabel = z.string().regex(/^[a-z][a-z0-9 _-]{0,39}$/, "v.unknownCategory");
 export const categoryPatch = z
   .object({
     title: z.string().trim().min(1).max(60),
@@ -111,4 +113,4 @@ export const categoryPatch = z
   })
   .partial()
   .strict()
-  .refine((v) => Object.keys(v).length > 0, "Nothing to update");
+  .refine((v) => Object.keys(v).length > 0, "v.nothingToUpdate");

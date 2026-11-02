@@ -1,6 +1,8 @@
+"use client";
 import { AlertCircle, Inbox, WifiOff, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n/client";
 
 function Centered({ icon: Icon, tone, title, children, actions }: { icon: LucideIcon; tone?: string; title: string; children?: React.ReactNode; actions?: React.ReactNode }) {
   return (
@@ -17,15 +19,15 @@ export const EmptyState = ({ title, children, action }: { title: string; childre
   <Centered icon={Inbox} title={title} actions={action}>{children}</Centered>
 );
 
-export const ErrorState = ({ title = "Couldn't load data", message, onRetry }: { title?: string; message?: string; onRetry?: () => void }) => (
-  <Centered icon={AlertCircle} tone="text-sev-critical" title={title}
-    actions={onRetry && <Button variant="outline" onClick={onRetry}>Try again</Button>}>
-    {message ?? "The server did not respond. Check the connection and try again."}
+export const ErrorState = ({ title, message, onRetry }: { title?: string; message?: string; onRetry?: () => void }) => { const t = useT(); return (
+  <Centered icon={AlertCircle} tone="text-sev-critical" title={title ?? t("states.couldntLoad")}
+    actions={onRetry && <Button variant="outline" onClick={onRetry}>{t("states.tryAgain")}</Button>}>
+    {message ?? t("states.theServerDidNotRespond")}
   </Centered>
-);
+); };
 
-export const LoadingList = ({ rows = 3 }: { rows?: number }) => (
-  <div className="space-y-3 p-4" role="status" aria-label="Loading">
+export const LoadingList = ({ rows = 3 }: { rows?: number }) => { const t = useT(); return (
+  <div className="space-y-3 p-4" role="status" aria-label={t("states.loading")}>
     {Array.from({ length: rows }, (_, i) => (
       <div key={i} className="flex gap-4 rounded-sm border border-border bg-surface p-3">
         <Skeleton className="h-16 w-28 rounded-sm" />
@@ -33,11 +35,11 @@ export const LoadingList = ({ rows = 3 }: { rows?: number }) => (
       </div>
     ))}
   </div>
-);
+); };
 
-export const OfflineBanner = () => (
+export const OfflineBanner = () => { const t = useT(); return (
   <div role="alert" className="mx-8 mb-3 flex items-center gap-3 rounded-sm border border-sev-high bg-sev-high/10 px-4 py-3">
     <WifiOff className="size-4 text-sev-high" aria-hidden />
-    <div><p className="text-sm font-semibold">Connection lost</p><p className="text-xs text-text-2">Showing the last data received. Reconnecting…</p></div>
+    <div><p className="text-sm font-semibold">{t("states.connectionLost")}</p><p className="text-xs text-text-2">{t("states.showingTheLastDataReceived")}</p></div>
   </div>
-);
+); };

@@ -1,4 +1,6 @@
+"use client";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/client";
 import { AlertTriangle, CheckCircle2, Hourglass, Inbox, Loader2, MinusCircle, type LucideIcon } from "lucide-react";
 
 type Tone = "neutral" | "accent" | "ok" | "warn" | "danger";
@@ -23,24 +25,25 @@ export function StatusChip({ children, tone = "neutral", icon: Icon, dot, classN
   );
 }
 
-const incident = { open: ["accent", "OPEN"], acknowledged: ["neutral", "ACKNOWLEDGED"], resolved: ["ok", "RESOLVED"] } as const;
-export const IncidentStatusChip = ({ status }: { status: keyof typeof incident }) => (
-  <StatusChip tone={incident[status][0]} dot={status === "open"}>{incident[status][1]}</StatusChip>
-);
+const incident = { open: "accent", acknowledged: "neutral", resolved: "ok" } as const;
+export const IncidentStatusChip = ({ status }: { status: keyof typeof incident }) => {
+  const t = useT();
+  return <StatusChip tone={incident[status]} dot={status === "open"}>{t(`incidentStatus.${status}`)}</StatusChip>;
+};
 
 export type PipelineKey = keyof typeof pipeline;
 const pipeline = {
-  received: [Inbox, "RECEIVED", "neutral"], queued: [Hourglass, "WAITING FOR SECOND CHECK", "neutral"],
-  classifying: [Loader2, "SECOND CHECK RUNNING", "neutral"], ready_for_triage: [CheckCircle2, "READY FOR TRIAGE", "accent"], ready: [CheckCircle2, "READY FOR TRIAGE", "accent"],
-  confirmed: [CheckCircle2, "CONFIRMED", "ok"], dismissed: [CheckCircle2, "DISMISSED", "neutral"],
-  failed: [AlertTriangle, "SECOND CHECK FAILED", "warn"], skipped: [MinusCircle, "NO SECOND CHECK", "neutral"],
+  received: [Inbox, "neutral"], queued: [Hourglass, "neutral"], classifying: [Loader2, "neutral"], ready_for_triage: [CheckCircle2, "accent"], ready: [CheckCircle2, "accent"],
+  confirmed: [CheckCircle2, "ok"], dismissed: [CheckCircle2, "neutral"], failed: [AlertTriangle, "warn"], skipped: [MinusCircle, "neutral"],
 } as const;
 export function PipelineStatusChip({ status }: { status: PipelineKey }) {
-  const [Icon, label, tone] = pipeline[status];
-  return <StatusChip tone={tone} icon={Icon} className={status === "classifying" ? "[&_svg]:animate-spin" : undefined}>{label}</StatusChip>;
+  const t = useT();
+  const [Icon, tone] = pipeline[status];
+  return <StatusChip tone={tone} icon={Icon} className={status === "classifying" ? "[&_svg]:animate-spin" : undefined}>{t(`pipeline.${status}`)}</StatusChip>;
 }
 
-const health = { online: ["ok", "ONLINE"], connecting: ["warn", "CONNECTING"], pending: ["warn", "PENDING"], offline: ["danger", "OFFLINE"], error: ["danger", "ERROR"] } as const;
-export const HealthChip = ({ status }: { status: keyof typeof health }) => (
-  <StatusChip tone={health[status][0]} dot className="border-transparent bg-transparent">{health[status][1]}</StatusChip>
-);
+const health = { online: "ok", connecting: "warn", pending: "warn", offline: "danger", error: "danger" } as const;
+export const HealthChip = ({ status }: { status: keyof typeof health }) => {
+  const t = useT();
+  return <StatusChip tone={health[status]} dot className="border-transparent bg-transparent">{t(`health.${status}`)}</StatusChip>;
+};

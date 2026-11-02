@@ -3,8 +3,12 @@ import {
   SECRET_MASK, actionSchema, automationInput, automationPatch, checkActionConnections, conditionSchema, connectionInput, describeAutomation, maskConfig,
   mergeSecrets, parseConnectionConfig, waitForRun, type Action, type Condition, type RunRow,
 } from "@/lib/automations";
-import { OBJECT_CHOICES, SENSITIVITY_VALUES, sensitivityOf, sensitivityText } from "@/lib/plain";
-import { agreement, clsLabelText, isSecondCheck } from "@/lib/classification";
+import { OBJECT_CHOICES, SENSITIVITY_VALUES, sensitivityKey, sensitivityOf } from "@/lib/plain";
+import { agreement, clsLabelKey, isSecondCheck } from "@/lib/classification";
+import { makeT } from "@/lib/i18n";
+
+const en = makeT("en");
+const id = makeT("id");
 import { normaliseRule, ruleInput, ruleUpdate } from "@/lib/schemas";
 
 const ID = "9ea0bb5d-faa9-4b16-a51d-d9579ba64b39";
@@ -45,10 +49,10 @@ describe("actions", () => {
   });
   it("each action must name an enabled connection of the same kind", () => {
     const cs = [{ id: ID, kind: "webhook", enabled: true, name: "Hook" }, { id: ID2, kind: "modbus", enabled: false, name: "PLC" }];
-    expect(checkActionConnections([{ type: "webhook", connection: ID }], cs)).toEqual([]);
-    expect(checkActionConnections([{ type: "mqtt", connection: ID, topic: "t", retain: false }], cs)[0]).toMatch(/webhook connection/);
-    expect(checkActionConnections([{ type: "modbus", connection: ID2, function: "write_coil", address: 0, hold_s: 1 }], cs)[0]).toMatch(/switched off/);
-    expect(checkActionConnections([{ type: "webhook", connection: "00000000-0000-0000-0000-000000000000" }], cs)[0]).toMatch(/does not exist/);
+    expect(checkActionConnections([{ type: "webhook", connection: ID }], cs, en)).toEqual([]);
+    expect(checkActionConnections([{ type: "mqtt", connection: ID, topic: "t", retain: false }], cs, en)[0]).toMatch(/webhook connection/);
+    expect(checkActionConnections([{ type: "modbus", connection: ID2, function: "write_coil", address: 0, hold_s: 1 }], cs, en)[0]).toMatch(/switched off/);
+    expect(checkActionConnections([{ type: "webhook", connection: "00000000-0000-0000-0000-000000000000" }], cs, en)[0]).toMatch(/does not exist/);
   });
 });
 
@@ -118,13 +122,13 @@ describe("plain-language description", () => {
   it("reads like a sentence", () => {
     const conds: Condition[] = [{ field: "camera", in: [ID] }, { field: "label", in: ["person"] }, { field: "severity", at_least: "HIGH" }];
     const acts: Action[] = [{ type: "webhook", connection: ID2 }, { type: "modbus", connection: ID2, function: "write_coil", address: 3, hold_s: 5 }];
-    expect(describeAutomation(conds, acts, cams, conns)).toBe("When it is on Dock 2 and it sees a person and it is at least high priority, then send a message to Control room, then switch output 3 on for 5 s on Control room.");
+    expect(describeAutomation(conds, acts, cams, conns, [], en)).toBe("When it is on Dock 2 and it sees a person and it is at least high priority, then send a message to Control room, then switch output 3 on for 5 s on Control room.");
   });
   it("says so when there are no conditions", () => {
-    expect(describeAutomation([], [{ type: "webhook", connection: ID2 }], cams, conns)).toBe("When any event happens, then send a message to Control room.");
+    expect(describeAutomation([], [{ type: "webhook", connection: ID2 }], cams, conns, [], en)).toBe("When any event happens, then send a message to Control room.");
   });
   it("names warning signs and the AI check in plain words", () => {
-    expect(describeAutomation([{ field: "indicator", triggered: "weapon" }, { field: "classified_as", is: "false_alarm" }, { field: "speed_kmh", above: 60 }, { field: "time", between: ["22:00", "06:00"], utc_offset_min: 420 }], [], [], [], [{ key: "weapon", title: "Weapon-like object" }]))
+    expect(describeAutomation([{ field: "indicator", triggered: "weapon" }, { field: "classified_as", is: "false_alarm" }, { field: "speed_kmh", above: 60 }, { field: "time", between: ["22:00", "06:00"], utc_offset_min: 420 }], [], [], [], [{ key: "weapon", title: "Weapon-like object" }], en))
       .toBe("When the warning sign “Weapon-like object” appeared and the AI check says it is not a real detection and it moves faster than 60 km/h and the time is between 22:00 and 06:00, then do nothing yet.");
   });
 });
@@ -154,7 +158,8 @@ describe("waiting for a test run", () => {
 describe("sensitivity (plain words for the threshold)", () => {
   it("high sensitivity means a LOW threshold: more warning signs", () => {
     expect(sensitivityOf(0.9)).toBe("low"); expect(sensitivityOf(0.7)).toBe("medium"); expect(sensitivityOf(0.35)).toBe("high");
-    expect(sensitivityText(0.75)).toBe("Medium");
+    expect(en(sensitivityKey(0.75))).toBe("Medium");
+    expect(id(sensitivityKey(0.75))).toBe("Sedang");
   });
   it("the presets land in their own bucket", () => {
     for (const k of ["low", "medium", "high"] as const) expect(sensitivityOf(SENSITIVITY_VALUES[k])).toBe(k);
@@ -180,8 +185,9 @@ describe("rule kind 'spotted next to a person'", () => {
 
 describe("classification display", () => {
   it("renders 'other' as Other object and tells the camera AI from the second check", () => {
-    expect(clsLabelText.other).toBe("Other object");
-    expect(clsLabelText.false_alarm).toBe("not a real detection");
+    expect(en(clsLabelKey("other"))).toBe("Other object");
+    expect(id(clsLabelKey("other"))).toBe("Objek lain");
+    expect(en(clsLabelKey("false_alarm"))).toBe("Not a real detection");
     expect(isSecondCheck("detector")).toBe(false);
     expect(isSecondCheck(null)).toBe(false);
     expect(isSecondCheck("d1")).toBe(true);
@@ -189,5 +195,14 @@ describe("classification display", () => {
   it("'other' never counts as a disagreement", () => {
     expect(agreement("dog", "other")).toBe("unknown");
     expect(agreement("person", "other")).toBe("unknown");
+  });
+});
+
+describe("the sentence in Indonesian (the default language)", () => {
+  it("reads naturally", () => {
+    const conds: Condition[] = [{ field: "label", in: ["person"] }, { field: "severity", at_least: "HIGH" }];
+    expect(describeAutomation(conds, [{ type: "webhook", connection: ID }], [], [{ id: ID, name: "Ruang kendali" }], [], id))
+      .toBe("Jika kamera melihat orang dan tingkatnya minimal tinggi, maka kirim pesan ke Ruang kendali.");
+    expect(describeAutomation([], [], [], [], [], id)).toBe("Jika ada kejadian apa pun, maka belum ada tindakan.");
   });
 });

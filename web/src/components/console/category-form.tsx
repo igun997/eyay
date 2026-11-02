@@ -9,11 +9,13 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { api } from "@/hooks/use-api";
 import { categoryPatch, severities } from "@/lib/schemas";
 import type { CategoryRow } from "@/lib/types";
+import { useT } from "@/lib/i18n/client";
 
 const sel = "h-9 w-full rounded-sm border border-border-strong bg-background px-2 text-sm";
 
 /** Admin: what an event of this label means. Plain-language effect of cooldown and burst is shown under each field. */
 export function CategoryDialog({ open, onOpenChange, category, onSaved }: { open: boolean; onOpenChange: (o: boolean) => void; category: CategoryRow; onSaved: () => void }) {
+  const t = useT();
   const [title, setTitle] = useState(category.title);
   const [severity, setSeverity] = useState(category.severity);
   const [opens, setOpens] = useState(category.opens_incident);
@@ -34,7 +36,7 @@ export function CategoryDialog({ open, onOpenChange, category, onSaved }: { open
     setBusy(true); setErr(null);
     try {
       await api(`/api/categories/${encodeURIComponent(category.label)}`, { method: "PUT", json: payload });
-      toast.success(`${title} updated`, { description: "Applied within about 5 seconds." });
+      toast.success(t("common.updatedToast", { name: title }), { description: t("categoryForm.appliedWithinAbout5Seconds") });
       onSaved(); onOpenChange(false);
     } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
   }
@@ -44,29 +46,29 @@ export function CategoryDialog({ open, onOpenChange, category, onSaved }: { open
       <DialogContent className="max-h-[92vh] sm:max-w-lg overflow-y-auto rounded-lg border-border bg-surface-2">
         <form onSubmit={save} className="space-y-4" noValidate>
           <DialogHeader>
-            <DialogTitle>Edit category · {category.label}</DialogTitle>
-            <DialogDescription>Used on every camera that watches “{category.label}”. A category only decides how events and incidents are created; sending alerts is set up under Alerts.</DialogDescription>
+            <DialogTitle>{t("categoryForm.editCategory")} · {category.label}</DialogTitle>
+            <DialogDescription>{t("categoryForm.usedOnEveryCameraThat")}{category.label}{t("categoryForm.aCategoryOnlyDecidesHow")}</DialogDescription>
           </DialogHeader>
           {err && <p role="alert" className="rounded-sm border border-sev-critical/40 bg-sev-critical/10 px-3 py-2 text-sm text-sev-critical">{err}</p>}
-          <div className="space-y-2"><Label htmlFor="cat-title">Title</Label>
+          <div className="space-y-2"><Label htmlFor="cat-title">{t("categoryForm.title")}</Label>
             <Input id="cat-title" value={title} onChange={(e) => setTitle(e.target.value)} className="border-border-strong bg-background" /></div>
-          <div className="space-y-2"><Label htmlFor="cat-sev">Severity</Label>
+          <div className="space-y-2"><Label htmlFor="cat-sev">{t("categoryForm.severity")}</Label>
             <select id="cat-sev" value={severity} onChange={(e) => setSeverity(e.target.value as typeof severity)} className={sel}>{severities.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
-          <div className="space-y-2"><Label htmlFor="cat-cool">Quiet period (seconds)</Label>
+          <div className="space-y-2"><Label htmlFor="cat-cool">{t("categoryForm.quietPeriodSeconds")}</Label>
             <Input id="cat-cool" type="number" min={0} max={86400} step={1} value={cooldown} onChange={(e) => setCooldown(e.target.value)} className="border-border-strong bg-background font-mono" />
-            <p className="text-xs text-text-3">One event per kind of object per camera per quiet period, so a person who stays in view is not reported again every second.</p></div>
+            <p className="text-xs text-text-3">{t("categoryForm.oneEventPerKindOf")}</p></div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2"><Label htmlFor="cat-bs">Follow-up photos: over how many seconds</Label>
+            <div className="space-y-2"><Label htmlFor="cat-bs">{t("categoryForm.followUpPhotosOverHow")}</Label>
               <Input id="cat-bs" type="number" min={0} max={60} step={1} value={burstS} onChange={(e) => setBurstS(e.target.value)} className="border-border-strong bg-background font-mono" /></div>
-            <div className="space-y-2"><Label htmlFor="cat-bf">Follow-up photos: how many</Label>
+            <div className="space-y-2"><Label htmlFor="cat-bf">{t("categoryForm.followUpPhotosHowMany")}</Label>
               <Input id="cat-bf" type="number" min={1} max={12} step={1} value={frames} onChange={(e) => setFrames(e.target.value)} className="border-border-strong bg-background font-mono" /></div>
           </div>
-          <p className="-mt-2 text-xs text-text-3">After an event, EyeAI takes N follow-up photos over S seconds (0 seconds = a single photo; never video). Warning-sign rules look at them.</p>
-          <div className="flex items-center justify-between gap-4 text-sm"><Label htmlFor="cat-opens" className="font-normal">Open an incident immediately</Label><Switch id="cat-opens" checked={opens} onCheckedChange={setOpens} /></div>
-          <div className="flex items-center justify-between gap-4 text-sm"><Label htmlFor="cat-enabled" className="font-normal">Enabled</Label><Switch id="cat-enabled" checked={enabled} onCheckedChange={setEnabled} /></div>
+          <p className="-mt-2 text-xs text-text-3">{t("categoryForm.afterAnEventEyeaiTakes")}</p>
+          <div className="flex items-center justify-between gap-4 text-sm"><Label htmlFor="cat-opens" className="font-normal">{t("categoryForm.openAnIncidentImmediately")}</Label><Switch id="cat-opens" checked={opens} onCheckedChange={setOpens} /></div>
+          <div className="flex items-center justify-between gap-4 text-sm"><Label htmlFor="cat-enabled" className="font-normal">{t("categoryForm.enabled")}</Label><Switch id="cat-enabled" checked={enabled} onCheckedChange={setEnabled} /></div>
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={busy || problems.length > 0}>Save changes</Button>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{t("categoryForm.cancel")}</Button>
+            <Button type="submit" disabled={busy || problems.length > 0}>{t("categoryForm.saveChanges")}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN, checkEffective, compact, effective, mergeConfig, overrides, parseConfig, quadArea } from "@/lib/engine-config";
-import { formatSpeed } from "@/lib/format";
+import { makeT } from "@/lib/i18n";
+const en = makeT("en");
 import { categoryLabel, categoryPatch, normaliseRule, ruleInput, ruleKey, ruleUpdate } from "@/lib/schemas";
 
 describe("parseConfig ranges (docs/ENGINE_CONFIG.md)", () => {
@@ -66,8 +67,8 @@ describe("merge and inheritance", () => {
 
 describe("checkEffective: the config a camera really runs with", () => {
   it("a line needs both lines and a measured distance (it scales every speed)", () => {
-    expect(checkEffective({ calibration: { method: "line" } }).length).toBeGreaterThan(0);
-    expect(checkEffective({ calibration: { method: "line", line1: 0.4, line2: 0.7 } }).join()).toMatch(/real distance/);
+    expect(checkEffective({ calibration: { method: "line" } }, en).length).toBeGreaterThan(0);
+    expect(checkEffective({ calibration: { method: "line", line1: 0.4, line2: 0.7 } }, en).join()).toMatch(/real distance/);
     expect(checkEffective({ calibration: { method: "line", line1: 0.4, line2: 0.7, distance_m: 12 } })).toEqual([]);
   });
   it("inherited geometry counts: a camera may only switch the method on", () => {
@@ -78,7 +79,7 @@ describe("checkEffective: the config a camera really runs with", () => {
     expect(checkEffective({ calibration: { method: "homography" } }).length).toBe(2);
     const quad: [number, number][] = [[0.1, 0.9], [0.1, 0.5], [0.9, 0.5], [0.9, 0.9]];
     expect(checkEffective({ calibration: { method: "homography", pixels: quad, world_m: [[0, 0], [0, 30], [7, 30], [7, 0]] } })).toEqual([]);
-    expect(checkEffective({ calibration: { method: "homography", pixels: quad, world_m: [[0, 0], [1, 1], [2, 2], [3, 3]] } }).join()).toMatch(/enclose no area/);
+    expect(checkEffective({ calibration: { method: "homography", pixels: quad, world_m: [[0, 0], [1, 1], [2, 2], [3, 3]] } }, en).join()).toMatch(/enclose no area/);
   });
   it("method none and an empty config are always fine", () => {
     expect(checkEffective({})).toEqual([]);
@@ -94,7 +95,6 @@ describe("calibration editor output", () => {
     expect(out).toEqual({ method: "line", line1: 0.4, line2: 0.7, distance_m: 12 });
     expect(overrides({ speed_limit_kmh: 50 }, { speed_limit_kmh: 50 }, inherited)).toEqual({ speed_limit_kmh: 50 });
   });
-  it("formats the speed rounded to km/h", () => expect(formatSpeed(61.6)).toBe("62 km/h"));
 });
 
 describe("behaviour rule input", () => {
@@ -169,5 +169,33 @@ describe("category patch", () => {
   it("labels are lowercase COCO-style names, spaces allowed", () => {
     expect(categoryLabel.safeParse("traffic light").success).toBe(true);
     for (const bad of ["", "Car", "../x", "a;drop"]) expect(categoryLabel.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe("language (automatic text) is global only", () => {
+  it("is accepted in the defaults and kept when compacting and merging", () => {
+    expect(parseConfig({ language: "en" }, "defaults")).toEqual({ ok: true, config: { language: "en" } });
+    expect(parseConfig({ language: "id", tracker: { min_hits: 3 } }, "defaults")).toEqual({ ok: true, config: { language: "id", tracker: { min_hits: 3 } } });
+    expect(compact({ language: "en", detector: { nms_iou: null } })).toEqual({ language: "en" });
+    expect(mergeConfig({ language: "id" }, { language: "en" }).language).toBe("en");
+    expect(mergeConfig({ language: "en" }, {}).language).toBe("en");
+  });
+  it("is rejected in a camera's config, with a message in the user's language", () => {
+    const en2 = parseConfig({ language: "en" }, "camera", en);
+    expect(en2.ok).toBe(false);
+    expect(!en2.ok && en2.errors[0]).toMatch(/every camera/);
+    const idr = parseConfig({ language: "en" }, "camera");
+    expect(!idr.ok && idr.errors[0]).toMatch(/semua kamera/);
+    expect(parseConfig({ language: null, tracker: { min_hits: 2 } }, "camera").ok).toBe(true);
+  });
+  it("only id and en are valid", () => {
+    expect(parseConfig({ language: "fr" }, "defaults").ok).toBe(false);
+    expect(parseConfig({ language: 1 }, "defaults").ok).toBe(false);
+  });
+  it("error messages name the setting in plain words", () => {
+    const r = parseConfig({ detector: { nms_iou: 2 } }, "camera", en);
+    expect(!r.ok && r.errors[0]).toBe("Merge overlapping boxes: Must be at most 0.9");
+    const idr = parseConfig({ detector: { nms_iou: 2 } });
+    expect(!idr.ok && idr.errors[0]).toBe("Gabungkan kotak yang tumpang tindih: Maksimal 0.9");
   });
 });

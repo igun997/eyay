@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const session = vi.hoisted(() => ({ role: "admin" as "admin" | "security" | null }));
 vi.mock("@/lib/server/auth", () => {
-  class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
+  class HttpError extends Error { constructor(public status: number, message: string, public params?: Record<string, string | number>) { super(message); } }
   return {
     HttpError,
     requireSession: async (roles?: string[]) => {
-      if (!session.role) throw new HttpError(401, "Not signed in");
-      if (roles && !roles.includes(session.role)) throw new HttpError(403, "Not allowed for your role");
+      if (!session.role) throw new HttpError(401, "err.notSignedIn");
+      if (roles && !roles.includes(session.role)) throw new HttpError(403, "err.notAllowedForYourRole");
       return { uid: "00000000-0000-0000-0000-000000000001", email: "a@b.c", name: "A", role: session.role };
     },
   };
@@ -58,8 +58,9 @@ import { POST as testAuto } from "@/app/api/automations/[id]/test/route";
 import { GET as autoRuns } from "@/app/api/automations/[id]/runs/route";
 import { GET as allRuns } from "@/app/api/automation-runs/route";
 
+const EN = { cookie: "eyeai_lang=en" }; // the handlers answer in the language of the cookie; the UI default is Indonesian
 const req = (body: unknown, method = "POST", url = "http://x/api") =>
-  new Request(url, method === "GET" || method === "DELETE" ? { method } : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  new Request(url, method === "GET" || method === "DELETE" ? { method, headers: EN } : { method, headers: { "Content-Type": "application/json", ...EN }, body: JSON.stringify(body) });
 const ctx = <P,>(p: P) => ({ params: Promise.resolve(p) });
 const webhook = { name: "Control room", kind: "webhook", config: { url: "https://h.example/x", secret: "topsecret", headers: { "X-Api-Key": "abc" } } };
 

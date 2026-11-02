@@ -1,4 +1,6 @@
+"use client";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/client";
 import type { Severity } from "@/lib/types";
 
 const tone: Record<Severity, string> = {
@@ -10,10 +12,11 @@ const tone: Record<Severity, string> = {
 
 /** Severity is never colour-only: dot + text label (design-system rule). */
 export function SeverityPill({ severity, className }: { severity: Severity; className?: string }) {
+  const t = useT();
   return (
-    <span className={cn("inline-flex h-5 items-center gap-1.5 rounded-sm px-2 font-mono text-[11px] font-semibold tracking-wider", tone[severity], className)}>
+    <span className={cn("inline-flex h-5 items-center gap-1.5 rounded-sm px-2 font-mono text-[11px] font-semibold uppercase tracking-wider", tone[severity], className)}>
       <span className="size-1.5 rounded-full bg-current" aria-hidden />
-      {severity}
+      {t(`sev.${severity}`)}
     </span>
   );
 }

@@ -17,13 +17,13 @@ export const POST = route(async (req) => {
   const { key, ...v } = normaliseRule(await body(req, ruleInput));
   const known = new Set((await listCategories()).map((c) => c.label));
   const bad = v.applies_to.filter((l) => !known.has(l));
-  if (bad.length) throw new HttpError(400, `applies_to: unknown categories ${bad.join(", ")}`);
+  if (bad.length) throw new HttpError(400, "err.unknownCategories", { list: bad.join(", ") });
   try {
     const row = await insertBehaviorRule(key, { ...v, question: v.question ?? null });
     await query("INSERT INTO audit_log (user_id, action, target) VALUES ($1,'rule.create',$2)", [u.uid, key]);
     return row;
   } catch (e) {
-    if ((e as { code?: string }).code === "23505") throw new HttpError(409, `A rule with key “${key}” already exists`);
+    if ((e as { code?: string }).code === "23505") throw new HttpError(409, "err.ruleExists", { key });
     throw e;
   }
 });
