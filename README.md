@@ -2,13 +2,13 @@
 
 Admins register an RTSP or M3U8 URL; a worker listens, runs YOLOX on the live frames and writes every detection that
 falls in a configured category straight into Postgres. Security reviews them in triage and handles incidents. The live
-view shows the stream with bounding boxes drawn on it. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+view shows the stream with bounding boxes drawn on it. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), engine settings: [docs/ENGINE_CONFIG.md](docs/ENGINE_CONFIG.md),
 UI reference: [docs/design-system](docs/design-system/README.md).
 
 | Image | Source | Role |
 |---|---|---|
 | `eyeai-app` | `docker/web.Dockerfile` (`web/`, Next.js 15 + shadcn/ui) | UI + API, applies DB migrations on boot, seeds the first admin |
-| `eyeai-worker` | `docker/worker.Dockerfile` (`worker/`, reuses `src/eyeai/detect`) | stream listener, detector, events/incidents writer, MJPEG with boxes |
+| `eyeai-worker` | `docker/engine.Dockerfile` (`engine/`, Rust: ffmpeg + ONNX Runtime) | stream listener, YOLOX detector, tracker, speed, events/incidents writer, classifier, MJPEG with boxes |
 | `postgres:16-alpine` | upstream | data |
 | `ollama/ollama` (profile `classifier`) | upstream, model **Liquid AI d1-3B** | server-side classification of every snapshot (System One decision model, text+image) |
 | `mediamtx` + `jrottenberg/ffmpeg` | upstream, compose profile `dev` only | local RTSP/HLS server fed with `data/samples/*.mp4` for live testing without a camera |
@@ -34,9 +34,9 @@ and the e2e pass) it publishes them to GitHub Container Registry: `ghcr.io/<owne
 commit SHA. Pull one with `docker pull ghcr.io/<owner>/<repo>-app:latest` (the package is private until you change its visibility).
 
 Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,
-everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: inference
-measured 0.12 s per frame on one idle stream and 0.7-1.7 s per frame with 3 streams sharing 2 cores, so cap it with `EYEAI_TARGET_FPS` and run one worker per ~2 streams per 2 cores.
-One worker per database (no source locking yet). Web tests: `cd web && pnpm test`; worker tests: `PYTHONPATH=src:worker pytest worker/tests`.
+everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: the earlier Python worker
+measured 0.12 s per frame on one idle stream and 0.7-1.7 s per frame with 3 streams sharing 2 cores; the Rust engine measured about 0.5 s per frame with 2 streams on a busy 8-core machine (not a clean benchmark, so measure on your hardware). Cap it with `EYEAI_TARGET_FPS` (or per camera in the dashboard) and `EYEAI_ORT_THREADS`.
+One worker per database (no source locking yet). Web tests: `cd web && pnpm test`; engine tests: `docker build --target test -f docker/engine.Dockerfile -t eyeai-engine-test . && docker run --rm --network host -e DATABASE_URL=postgres://... eyeai-engine-test` (the Postgres integration tests run when `DATABASE_URL` points at a migrated database).
 
 ---
 

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# Rust worker image (eyeai-engine). Build with the repository root as context:
-#   docker build -f docker/engine.Dockerfile -t eyeai-engine .
+# Worker image: the Rust engine (engine/). Build with the repository root as context:
+#   docker build -f docker/engine.Dockerfile -t eyeai-worker .
 # Debian forky (testing) is used because it is the distribution that ships ffmpeg 9.x, which ffmpeg-next 9 requires.
 
 FROM python:3.12-slim AS model
@@ -25,6 +25,12 @@ COPY engine/src ./src
 RUN cargo build --release --locked \
  # the runtime image needs exactly the packages that own the shared libraries the binary links
  && ldd target/release/eyeai-engine | awk '/=> \//{print $3}' | xargs dpkg -S 2>/dev/null | cut -d: -f1 | sort -u > /runtime-packages.txt
+
+# Tests: `docker build --target test -t eyeai-engine-test .` then run it. The Postgres integration tests run when DATABASE_URL
+# points at a database with db/migrations applied (CI does); without it they are skipped.
+FROM build AS test
+RUN cargo test --release --locked --no-run
+CMD ["cargo", "test", "--release", "--locked"]
 
 FROM debian:forky-slim
 ENV EYEAI_MODEL=/app/data/models/yolox_s.onnx PORT=8090

@@ -1,0 +1,5 @@
+*
+!engine/Cargo.toml
+!engine/Cargo.lock
+!engine/src
+!docker/fetch_model.py

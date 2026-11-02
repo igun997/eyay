@@ -7,9 +7,12 @@ admin (web) --register rtsp/m3u8--> Postgres <--poll sources-- worker --YOLOX-->
 ```
 
 - **web** (Next.js 15, shadcn/ui, Tailwind): auth, roles `admin` and `security`, all screens.
-- **worker** (Python): polls `sources` every 5 s, one thread per enabled source, reuses `eyeai.detect` (YOLOX Apache-2.0,
-  IoU tracker). Writes `events` (+`event_snapshots`, `incidents`, `incident_timeline`) straight to Postgres and serves the
-  annotated live MJPEG. Updates `sources.status/fps/last_seen`, `worker_heartbeats`.
+- **worker** (Rust, `engine/`): polls `sources` every 5 s, one thread per enabled source: ffmpeg decode -> YOLOX (ONNX Runtime,
+  Apache-2.0 weights) -> per-label IoU tracker -> events. Writes `events` (+`event_snapshots`, `incidents`, `incident_timeline`)
+  straight to Postgres, runs the classifier loop, and serves the annotated live MJPEG (boxes, speed, calibration geometry).
+  Updates `sources.status/fps/last_seen`, `worker_heartbeats`. Detector, tracker and speed calibration are configured from the
+  dashboard ([ENGINE_CONFIG.md](ENGINE_CONFIG.md)) and hot-reload within one poll. It grew from the proof of concept
+  jenggo/poc-yolo-coco (decoder, speed estimators) and replaced the earlier Python worker.
 - **db**: `db/migrations/*.sql` is the contract; web applies it on boot.
 - **mediamtx** (dev only, compose profile `dev`): local RTSP server fed by `ffmpeg` with a sample video, for live testing without a camera.
 
@@ -21,6 +24,12 @@ admin (web) --register rtsp/m3u8--> Postgres <--poll sources-- worker --YOLOX-->
 4. Security triages: **confirm** (event `confirmed`, timeline entry) or **dismiss** with reason (event `dismissed`; if every
    event of the incident is dismissed the incident is resolved as false alarm).
 5. Security/admin acknowledges, assigns, notes and resolves incidents.
+
+## Speed (optional, per camera)
+With a calibration (two lines and a distance, or four road corners) the engine estimates the speed of tracked objects. It is
+stored in `events.speed_kmh` and a track over the limit raises the `speeding` indicator through the behaviour-rule path (flag,
+suspicious, timeline, incident if there was none). Time comes from the stream's frame counter, never the wall clock. See
+[ENGINE_CONFIG.md](ENGINE_CONFIG.md); the numbers are estimates for a person to review and scale linearly with `distance_m`.
 
 ## Snapshot burst and indication
 The first snapshot is stored with the event. For `categories.burst_s` seconds the worker keeps sampling the same track
