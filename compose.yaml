@@ -48,6 +48,27 @@ services:
       EYEAI_ORT_THREADS: ${EYEAI_ORT_THREADS:-}     # ONNX threads per stream (default: auto)
     expose: ["8090"]
 
+  # Rust worker (engine/). Same contract as `worker`; run one or the other, never both against the same database.
+  #   docker compose stop worker && docker compose --profile rust up -d --build engine
+  engine:
+    profiles: [rust]
+    build: { context: ., dockerfile: docker/engine.Dockerfile }
+    image: eyeai-engine:latest
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
+      WORKER_ID: engine-1
+      CLASSIFIER_URL: ${CLASSIFIER_URL:-}
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-d1}
+      CLASSIFIER_TIMEOUT_S: ${CLASSIFIER_TIMEOUT_S:-60}
+      EYEAI_TARGET_FPS: ${EYEAI_TARGET_FPS:-5}
+      EYEAI_ORT_THREADS: ${EYEAI_ORT_THREADS:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    expose: ["8090"]
+    networks: { default: { aliases: [worker] } }   # the app reaches the worker at http://worker:8090
+
   # System One classifier (Liquid AI d1-3B, text+image) served by Ollama on /v1/systemone.
   #   CLASSIFIER_URL=http://classifier:11434 docker compose --profile classifier up --build
   # or point CLASSIFIER_URL at any Ollama / TypeSafe-compatible /v1/systemone endpoint (e.g. a GPU box) and skip this profile.
