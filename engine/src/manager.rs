@@ -58,6 +58,7 @@ impl WorkerManager {
             error!("loading engine defaults failed: {e:#}");
             serde_json::Value::Null
         });
+        crate::i18n::set_from_defaults(&defaults);
         let sources: HashMap<String, _> = self
             .repo
             .list_sources()?

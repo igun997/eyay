@@ -13,6 +13,7 @@ use chrono::{DateTime, Duration, Utc};
 use tracing::{error, info};
 
 use crate::behavior::{Flag, apply_flags};
+use crate::i18n;
 use crate::model::{BBox, Category, EventRecord, Snapshot, SourceInfo};
 use crate::repo::{NewEvent, Repository};
 use crate::speed::SpeedReading;
@@ -136,11 +137,9 @@ impl EventDecider {
             }
             let over = r.kmh > cal.speed_limit_kmh;
             let flag = Flag {
-                rule: "speeding".into(), title: "Over speed limit".into(), prob: None, threshold: 0.0, severity: cal.speed_severity.clone(),
+                rule: "speeding".into(), title: i18n::speeding_title(i18n::lang()), prob: None, threshold: 0.0, severity: cal.speed_severity.clone(),
                 triggered: true, opens_incident: true,
-                detail: Some(format!(
-                    "{:.0} km/h estimated, limit {:.0} km/h - estimate from the calibrated geometry, needs human review", r.kmh, cal.speed_limit_kmh
-                )),
+                detail: Some(i18n::speeding_detail(i18n::lang(), r.kmh, cal.speed_limit_kmh)),
             };
             let res = self.repo.transaction(&mut |tx| {
                 tx.set_event_speed(&event_id, r.kmh)?;
@@ -163,7 +162,7 @@ impl EventDecider {
     fn write(&self, cat: &Category, t: &Tracked, snap: &Snapshot, now: DateTime<Utc>) -> Result<EventRecord> {
         let src = &self.source;
         let bbox = BBox::from_xyxy(t.bbox);
-        let title = format!("{} detected at {}", cat.title, src.name);
+        let title = i18n::detected_at(i18n::lang(), &cat.title, &src.name);
         let mut rec: Option<EventRecord> = None;
         self.repo.transaction(&mut |tx| {
             let (mut incident_id, mut incident_code, mut grouped) = (None, None, false);

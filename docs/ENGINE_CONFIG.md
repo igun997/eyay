@@ -49,6 +49,14 @@ Per-camera columns that already exist stay where they are: `sources.labels`, `so
 }
 ```
 
+## Language (global only)
+
+`engine_settings 'defaults'` -> `"language": "id" | "en"` (default `id`) sets the language of the text the worker writes: event titles, timeline
+entries, activity-pattern sentences and warning-sign details. It applies within one poll and to new text only. Names an admin can edit
+(categories, rules, cameras) are not translated by it; migration 008 translates the seeded names once, only where they still hold the original
+English text. Questions sent to the optional second AI check stay English (the model's language). The dashboard's own language is a per-user
+setting (cookie `eyeai_lang`, default `id`).
+
 ## Classifier tuning (global only)
 
 Read from `engine_settings 'defaults'` under `classifier` (a per-camera `classifier` key is ignored: one classifier loop serves all

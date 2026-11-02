@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use tracing::{error, info};
 
+use crate::i18n::{self, Lang};
 use crate::model::{higher, sev_rank};
 use crate::repo::{Repository, Tx};
 
@@ -90,7 +91,7 @@ impl RuleCache {
 }
 
 /// Evaluate kind=`indication` rules for a finished burst.
-pub fn indication_flags(rules: &[Rule], label: &str, kind: &str, burst_ms: i32, sentence: &str) -> Vec<Flag> {
+pub fn indication_flags(l: Lang, rules: &[Rule], label: &str, kind: &str, burst_ms: i32, sentence: &str) -> Vec<Flag> {
     rules
         .iter()
         .filter(|r| r.kind == "indication" && r.applies_to.iter().any(|l| l == label))
@@ -101,10 +102,7 @@ pub fn indication_flags(rules: &[Rule], label: &str, kind: &str, burst_ms: i32, 
             Flag {
                 rule: r.key.clone(), title: r.title.clone(), prob: None, threshold: r.threshold, severity: r.severity.clone(),
                 triggered: hit, opens_incident: r.opens_incident,
-                detail: Some(format!(
-                    "{sentence} (indicator needs {:.1} s or more) - observed in snapshots, needs human review",
-                    min_ms as f64 / 1000.0
-                )),
+                detail: Some(i18n::pattern_rule_detail(l, sentence, min_ms as f64 / 1000.0)),
             }
         })
         .collect()
@@ -115,7 +113,7 @@ pub type ObjectHits = std::collections::HashMap<String, (f32, String)>;
 
 /// Evaluate kind=`object` rules (a knife, scissors, ... seen next to the person) for a finished burst. A rule that saw nothing yields
 /// an untriggered flag with no certainty, so the event shows it was checked.
-pub fn object_flags(rules: &[Rule], label: &str, hits: &ObjectHits) -> Vec<Flag> {
+pub fn object_flags(l: Lang, rules: &[Rule], label: &str, hits: &ObjectHits) -> Vec<Flag> {
     rules
         .iter()
         .filter(|r| r.kind == "object" && r.applies_to.iter().any(|l| l == label))
@@ -125,9 +123,7 @@ pub fn object_flags(rules: &[Rule], label: &str, hits: &ObjectHits) -> Vec<Flag>
             Flag {
                 rule: r.key.clone(), title: r.title.clone(), prob: best.map(|(s, _)| (s * 10_000.0).round() / 10_000.0), threshold: r.threshold,
                 severity: r.severity.clone(), triggered: hit, opens_incident: r.opens_incident,
-                detail: best.filter(|_| hit).map(|(s, o)| {
-                    format!("{o} seen next to the person (certainty {s:.2}) - read from the camera image, small or hidden objects are often missed, needs human review")
-                }),
+                detail: best.filter(|_| hit).map(|(s, o)| i18n::object_detail(l, o, *s)),
             }
         })
         .collect()
@@ -157,7 +153,7 @@ pub fn apply_flags(tx: &mut dyn Tx, event_id: &str, new: &[Flag], now: DateTime<
         }
     } else if let Some(o) = triggered.iter().filter(|f| f.opens_incident).max_by_key(|f| sev_rank(&f.severity)) {
         let (id, code) = tx.create_incident(
-            &format!("Suspicious: {} at {}", o.title, st.source_name), &o.severity, &st.source_id, &st.label, now,
+            &i18n::suspicious_incident(i18n::lang(), &o.title, &st.source_name), &o.severity, &st.source_id, &st.label, now,
         )?;
         tx.link_event_incident(event_id, &id)?;
         info!("event {}: indicator '{}' opened {code}", &event_id[..8.min(event_id.len())], o.title);
@@ -166,7 +162,7 @@ pub fn apply_flags(tx: &mut dyn Tx, event_id: &str, new: &[Flag], now: DateTime<
     tx.set_event_flags(event_id, &merged, true, &severity)?;
     if let Some(id) = incident_id {
         for f in fresh {
-            tx.add_timeline(&id, "system", &format!("Behaviour indicator: {}", f.title), f.detail.as_deref(), Some(event_id), now)?;
+            tx.add_timeline(&id, "system", &i18n::warning_sign_timeline(i18n::lang(), &f.title), f.detail.as_deref(), Some(event_id), now)?;
         }
     }
     Ok(())
@@ -240,11 +236,11 @@ mod tests {
             applies_to: vec!["person".into()], threshold: 0.5, config: json!({"indication_kind": "lingering", "min_burst_ms": 5000}),
             severity: "MEDIUM".into(), opens_incident: true, position: 0,
         };
-        let f = |kind, ms| indication_flags(std::slice::from_ref(&rule), "person", kind, ms, "s")[0].triggered;
+        let f = |kind, ms| indication_flags(Lang::En, std::slice::from_ref(&rule), "person", kind, ms, "s")[0].triggered;
         assert!(f("lingering", 5200));
         assert!(!f("lingering", 4000));
         assert!(!f("moving", 9000));
-        assert!(indication_flags(std::slice::from_ref(&rule), "car", "lingering", 9000, "s").is_empty());
+        assert!(indication_flags(Lang::En, std::slice::from_ref(&rule), "car", "lingering", 9000, "s").is_empty());
     }
 
     #[test]
@@ -254,12 +250,12 @@ mod tests {
             threshold: 0.35, config: json!({"objects": ["knife"], "margin": 0.3}), severity: "HIGH".into(), opens_incident: true, position: 0,
         };
         let hits = ObjectHits::from([("weapon_object".to_string(), (0.52, "knife".to_string()))]);
-        let f = object_flags(std::slice::from_ref(&rule), "person", &hits);
+        let f = object_flags(Lang::En, std::slice::from_ref(&rule), "person", &hits);
         assert!(f[0].triggered && f[0].prob == Some(0.52) && f[0].detail.as_deref().unwrap().starts_with("knife seen next to the person"));
         let weak = ObjectHits::from([("weapon_object".to_string(), (0.2, "knife".to_string()))]);
-        assert!(!object_flags(std::slice::from_ref(&rule), "person", &weak)[0].triggered);
-        let none = object_flags(std::slice::from_ref(&rule), "person", &ObjectHits::new());
+        assert!(!object_flags(Lang::En, std::slice::from_ref(&rule), "person", &weak)[0].triggered);
+        let none = object_flags(Lang::En, std::slice::from_ref(&rule), "person", &ObjectHits::new());
         assert!(!none[0].triggered && none[0].prob.is_none(), "checked, nothing seen");
-        assert!(object_flags(std::slice::from_ref(&rule), "car", &hits).is_empty());
+        assert!(object_flags(Lang::En, std::slice::from_ref(&rule), "car", &hits).is_empty());
     }
 }

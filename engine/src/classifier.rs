@@ -329,7 +329,7 @@ impl ClassifierService {
                 Flag {
                     rule: r.key.clone(), title: r.title.clone(), prob: p.map(|p| (p * 10_000.0).round() / 10_000.0), threshold: r.threshold,
                     severity: r.severity.clone(), triggered: hit, opens_incident: r.opens_incident,
-                    detail: hit.then(|| format!("P(yes) {:.2} >= {:.2} - model estimate, needs human review", p.unwrap_or_default(), r.threshold)),
+                    detail: hit.then(|| crate::i18n::question_detail(crate::i18n::lang(), p.unwrap_or_default(), r.threshold)),
                 }
             })
             .collect();

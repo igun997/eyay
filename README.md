@@ -2,7 +2,7 @@
 
 Admins register an RTSP or M3U8 URL; a worker listens, runs YOLOX on the live frames and writes every detection that
 falls in a configured category straight into Postgres. Security reviews them in triage and handles incidents. The live
-view shows the stream with bounding boxes drawn on it. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), engine settings: [docs/ENGINE_CONFIG.md](docs/ENGINE_CONFIG.md),
+view shows the stream with bounding boxes drawn on it. The dashboard is Indonesian by default (switch to English in the sidebar). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), engine settings: [docs/ENGINE_CONFIG.md](docs/ENGINE_CONFIG.md),
 UI reference: [docs/design-system](docs/design-system/README.md).
 
 | Image | Source | Role |

@@ -26,7 +26,13 @@ async function login(page, { email, password }) {
 }
 
 const browser = await chromium.launch();
-const admin = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+// the dashboard is Indonesian by default; the assertions below read the English copy, so every context asks for English
+const newPage = async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await ctx.addCookies([{ name: "eyeai_lang", value: "en", url: BASE }]);
+  return ctx.newPage();
+};
+const admin = await newPage();
 let failed = false;
 try {
   await step("app is healthy", async () => {
@@ -72,7 +78,7 @@ try {
     throw new Error("stream never went online");
   });
 
-  const sec = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  const sec = await newPage();
   await step("admin creates a security user; security signs in; admin-only areas are blocked", async () => {
     const r = await admin.request.post(`${BASE}/api/users`, { data: { email: "e2e-sec@eyeai.local", name: "E2E Security", password: "security123", role: "security" } });
     assert(r.ok() || r.status() === 409, `create user: ${r.status()}`);

@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use tracing::{error, info, warn};
 
 use crate::behavior::{ObjectHits, Rule, apply_flags, indication_flags, object_flags};
+use crate::i18n::{self, Lang};
 use crate::model::{BBox, Category, EventRecord, Snapshot, SourceInfo};
 use crate::repo::Repository;
 use crate::tracker::Tracked;
@@ -22,14 +23,6 @@ const CROWD_MIN: usize = 3;
 const MAX_PENDING: usize = 20;
 /// Re-associate a lost track id with the nearest same-label box within this centre distance.
 const FOLLOW_MAX_DIST: f64 = 0.25;
-
-fn plural(label: &str) -> String {
-    match label {
-        "person" => "people".into(),
-        "bus" => "buses".into(),
-        l => format!("{l}s"),
-    }
-}
 
 fn box_of(t: &Tracked) -> BBox {
     BBox::from_xyxy(t.bbox)
@@ -52,23 +45,23 @@ pub fn follow<'a>(tracked: &'a [Tracked], label: &str, track_id: i32, last: Opti
 }
 
 /// -> (indication_kind, sentence). `boxes` has one entry per stored snapshot (None = track not visible).
-pub fn classify_burst(title: &str, label: &str, boxes: &[Option<BBox>], burst_ms: i32, last_count: usize) -> (&'static str, String) {
+pub fn classify_burst(l: Lang, title: &str, label: &str, boxes: &[Option<BBox>], burst_ms: i32, last_count: usize) -> (&'static str, String) {
     let visible: Vec<&BBox> = boxes.iter().flatten().collect();
-    let secs = format!("{:.1} s", f64::from(burst_ms) / 1000.0);
+    let secs = f64::from(burst_ms) / 1000.0;
     if visible.len() >= 2 {
         let disp = dist(visible[0].centre(), visible[visible.len() - 1].centre());
         if disp > MOVE_THRESHOLD {
-            return ("moving", format!("{title} moving across the frame for {secs}"));
+            return ("moving", i18n::moving(l, title, secs));
         }
         if burst_ms >= LINGER_MIN_MS {
-            return ("lingering", format!("{title} lingering in view for {secs}"));
+            return ("lingering", i18n::lingering(l, title, secs));
         }
     }
     if last_count >= CROWD_MIN {
-        return ("crowd", format!("{last_count} {} in view", plural(label)));
+        return ("crowd", i18n::crowd(l, last_count, label));
     }
     let n = visible.len().max(1);
-    ("appeared", format!("{title} appeared (seen in {n} snapshot{})", if n != 1 { "s" } else { "" }))
+    ("appeared", i18n::appeared(l, title, n))
 }
 
 struct Pending {
@@ -232,17 +225,18 @@ impl BurstManager {
     }
 
     fn finalize(&self, p: &Pending, now: DateTime<Utc>) {
-        let (kind, sentence) = classify_burst(&p.title, &p.label, &p.boxes, p.last_ms, p.last_count);
+        let l = i18n::lang();
+        let (kind, sentence) = classify_burst(l, &p.title, &p.label, &p.boxes, p.last_ms, p.last_count);
         let n = p.boxes.len();
         let rules = (self.rules)();
         let res = self.repo.transaction(&mut |tx| {
             tx.finalize_burst(&p.event_id, p.last_ms, kind, &sentence)?;
             if let Some(inc) = &p.incident_id {
-                let detail = format!("{n} snapshot{} over {:.1} s", if n != 1 { "s" } else { "" }, f64::from(p.last_ms) / 1000.0);
-                tx.add_timeline(inc, "system", &format!("Indication: {sentence}"), Some(&detail), Some(&p.event_id), now)?;
+                let detail = i18n::photos_detail(l, n, f64::from(p.last_ms) / 1000.0);
+                tx.add_timeline(inc, "system", &i18n::pattern_timeline(l, &sentence), Some(&detail), Some(&p.event_id), now)?;
             }
-            let mut flags = indication_flags(&rules, &p.label, kind, p.last_ms, &sentence);
-            flags.extend(object_flags(&rules, &p.label, &p.objects));
+            let mut flags = indication_flags(l, &rules, &p.label, kind, p.last_ms, &sentence);
+            flags.extend(object_flags(l, &rules, &p.label, &p.objects));
             apply_flags(tx, &p.event_id, &flags, now)
         });
         match res {
@@ -275,10 +269,10 @@ mod tests {
 
     #[test]
     fn classify_moving_lingering_crowd_appeared() {
-        assert_eq!(classify_burst("Person", "person", &[b(0.1, 0.1), b(0.5, 0.1)], 4000, 1).0, "moving");
-        assert_eq!(classify_burst("Person", "person", &[b(0.1, 0.1), b(0.11, 0.1)], 5200, 1).0, "lingering");
-        assert_eq!(classify_burst("Person", "person", &[b(0.1, 0.1), b(0.11, 0.1)], 1000, 3).1, "3 people in view");
-        let (k, s) = classify_burst("Car", "car", &[b(0.1, 0.1)], 0, 1);
+        assert_eq!(classify_burst(Lang::En, "Person", "person", &[b(0.1, 0.1), b(0.5, 0.1)], 4000, 1).0, "moving");
+        assert_eq!(classify_burst(Lang::En, "Person", "person", &[b(0.1, 0.1), b(0.11, 0.1)], 5200, 1).0, "lingering");
+        assert_eq!(classify_burst(Lang::En, "Person", "person", &[b(0.1, 0.1), b(0.11, 0.1)], 1000, 3).1, "3 people in view");
+        let (k, s) = classify_burst(Lang::En, "Car", "car", &[b(0.1, 0.1)], 0, 1);
         assert_eq!((k, s.as_str()), ("appeared", "Car appeared (seen in 1 snapshot)"));
     }
 
@@ -316,7 +310,7 @@ mod tests {
         assert!(e.burst_done);
         assert_eq!(e.indication_kind.as_deref(), Some("moving"));
         assert_eq!(e.burst_ms, Some(6000));
-        assert!(s.timeline.iter().any(|t| t.2.starts_with("Indication:")));
+        assert!(s.timeline.iter().any(|t| t.2.starts_with("Pola aktivitas:") || t.2.starts_with("Indication:")));
     }
 
     #[test]

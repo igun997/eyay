@@ -10,6 +10,7 @@ mod coco;
 mod config;
 mod decision;
 mod decode;
+mod i18n;
 mod detector;
 mod manager;
 mod model;
