@@ -62,6 +62,29 @@ export const BUILTIN: Required<{ [G in keyof EngineConfig]: NonNullable<EngineCo
   calibration: { method: "none", speed_limit_kmh: 50, speed_severity: "HIGH", show_geometry: true, line_axis: "x", smoothing: 0.4 },
 };
 
+/** The plain name of each setting, used in form labels and error messages. */
+export const FIELD_LABELS: Record<string, string> = {
+  "detector.nms_iou": "Merge overlapping boxes", "detector.target_fps": "Checks per second", "detector.intra_threads": "Processing power",
+  "tracker.iou_threshold": "How strictly to follow the same object", "tracker.max_age": "How long to remember an object that disappears", "tracker.min_hits": "How many looks before it counts",
+  "events.new_track_gap_s": "Quiet-period exception for a new object",
+  "classifier.rules_enabled": "Warning-sign questions", "classifier.rule_frames": "Follow-up photos to check", "classifier.rule_max_queue": "Skip questions when this many are waiting", "classifier.batch": "Ask all questions at once",
+  "calibration.method": "Speed setup method", "calibration.speed_limit_kmh": "Speed limit", "calibration.speed_severity": "Over-limit warning severity", "calibration.show_geometry": "Show the lines on the live view",
+  "calibration.line_axis": "Direction measured", "calibration.line1": "Line 1", "calibration.line2": "Line 2", "calibration.distance_m": "Real distance between the lines",
+  "calibration.pixels": "Corners on the picture", "calibration.world_m": "Corners in metres", "calibration.smoothing": "Smoothing",
+};
+const GROUP_LABELS: Record<string, string> = { detector: "Camera AI", tracker: "Following objects", events: "Events", classifier: "Second AI check", calibration: "Speed setup" };
+export const plainPath = (path: (string | number | symbol)[]) => FIELD_LABELS[path.slice(0, 2).join(".")] ?? (path.length ? GROUP_LABELS[String(path[0])] ?? "Settings" : "Settings");
+
+type Issue = { path: (string | number | symbol)[]; code: string; message: string; minimum?: unknown; maximum?: unknown };
+function plainIssue(i: Issue): string {
+  const what = plainPath(i.path);
+  if (i.code === "too_small") return `${what}: must be at least ${String(i.minimum)}`;
+  if (i.code === "too_big") return `${what}: must be at most ${String(i.maximum)}`;
+  if (i.code === "unrecognized_keys") return `${what}: that setting does not exist`;
+  if (i.code === "invalid_type") return `${what}: that is not a valid value`;
+  return `${what}: ${i.message}`;
+}
+
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Drop null / undefined leaves and groups that end up empty: only real overrides are stored. */
@@ -99,15 +122,15 @@ export function checkEffective(merged: EngineConfig): string[] {
   const c = { ...BUILTIN.calibration, ...(merged.calibration ?? {}) };
   const errs: string[] = [];
   if (c.method === "line") {
-    if (c.line1 == null || c.line2 == null) errs.push("calibration: method line needs both line1 and line2");
-    else if (Math.abs(c.line1 - c.line2) < MIN_LINE_GAP) errs.push(`calibration: line1 and line2 must be at least ${MIN_LINE_GAP} apart`);
-    if (c.distance_m == null) errs.push("calibration: method line needs distance_m, the measured real distance between the lines (it scales every speed)");
+    if (c.line1 == null || c.line2 == null) errs.push("Speed setup: two lines need both line positions");
+    else if (Math.abs(c.line1 - c.line2) < MIN_LINE_GAP) errs.push(`Speed setup: the two lines must be at least ${MIN_LINE_GAP} apart`);
+    if (c.distance_m == null) errs.push("Speed setup: enter the real distance between the two lines, measured on site (it scales every speed)");
   }
   if (c.method === "homography") {
-    if (!c.pixels || c.pixels.length !== 4) errs.push("calibration: method homography needs four pixel corners");
-    if (!c.world_m || c.world_m.length !== 4) errs.push("calibration: method homography needs four world_m points in metres");
-    else if (c.pixels && c.pixels.length === 4 && quadArea(c.world_m) < 0.01) errs.push("calibration: world_m corners enclose no area");
-    if (c.pixels && c.pixels.length === 4 && quadArea(c.pixels) < 0.0005) errs.push("calibration: pixel corners enclose no area");
+    if (!c.pixels || c.pixels.length !== 4) errs.push("Speed setup: an angled view needs four corners drawn on the picture");
+    if (!c.world_m || c.world_m.length !== 4) errs.push("Speed setup: an angled view needs the same four corners in metres");
+    else if (c.pixels && c.pixels.length === 4 && quadArea(c.world_m) < 0.01) errs.push("Speed setup: the four corners in metres enclose no area");
+    if (c.pixels && c.pixels.length === 4 && quadArea(c.pixels) < 0.0005) errs.push("Speed setup: the four corners on the picture enclose no area");
   }
   return errs;
 }
@@ -127,9 +150,9 @@ export type ParseResult = { ok: true; config: EngineConfig } | { ok: false; erro
  */
 export function parseConfig(input: unknown, scope: "camera" | "defaults" = "camera"): ParseResult {
   const r = engineConfigSchema.safeParse(input);
-  if (!r.success) return { ok: false, errors: r.error.issues.map((i) => `${i.path.join(".") || "config"}: ${i.message}`) };
+  if (!r.success) return { ok: false, errors: r.error.issues.map((i) => plainIssue(i as unknown as Issue)) };
   const config = compact(r.data as EngineConfig);
-  if (scope === "camera" && config.classifier) return { ok: false, errors: ["classifier: global only, set it in the engine defaults (one classifier loop serves every camera)"] };
+  if (scope === "camera" && config.classifier) return { ok: false, errors: ["Second AI check settings apply to every camera, so set them in the settings for all cameras, not per camera"] };
   const own = checkInternal(config);
   return own.length ? { ok: false, errors: own } : { ok: true, config };
 }
@@ -137,7 +160,7 @@ export function parseConfig(input: unknown, scope: "camera" | "defaults" = "came
 /** Rules that hold inside one document regardless of inheritance. */
 function checkInternal(cfg: EngineConfig): string[] {
   const c = cfg.calibration;
-  if (c?.line1 != null && c?.line2 != null && Math.abs(c.line1 - c.line2) < MIN_LINE_GAP) return [`calibration: line1 and line2 must be at least ${MIN_LINE_GAP} apart`];
+  if (c?.line1 != null && c?.line2 != null && Math.abs(c.line1 - c.line2) < MIN_LINE_GAP) return [`Speed setup: the two lines must be at least ${MIN_LINE_GAP} apart`];
   return [];
 }
 

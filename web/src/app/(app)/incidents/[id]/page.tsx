@@ -68,7 +68,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
               <button type="button" onClick={() => setPreview({ eventId: e.id, idx: 0 })} className="mt-3 flex items-center gap-3 text-left">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={`/api/events/${e.id}/snapshot/0`} alt="" className="h-16 w-24 rounded-sm border border-border-strong object-cover" />
-                <ClassificationBadge label={e.label} confidence={e.confidence} source="EDGE" />
+                <ClassificationBadge label={e.label} confidence={e.confidence} source="CAMERA AI" />
               </button>
             );
           }} />
@@ -88,7 +88,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
             {shown && <IndicationLine kind={shown.indication_kind} text={shown.indication} burstMs={shown.burst_ms} done={shown.burst_done} speedKmh={shown.speed_kmh} />}
             <div className="grid grid-cols-4 gap-2">
               {frames.slice(0, 12).map((f) => (
-                <button key={`${f.event_id}-${f.idx}`} onClick={() => setPreview({ eventId: f.event_id, idx: f.idx })} aria-label={`Show ${events.find((e) => e.id === f.event_id)?.code} frame ${f.idx + 1}`}
+                <button key={`${f.event_id}-${f.idx}`} onClick={() => setPreview({ eventId: f.event_id, idx: f.idx })} aria-label={`Show ${events.find((e) => e.id === f.event_id)?.code} photo ${f.idx + 1}`}
                   className={`overflow-hidden rounded-sm border ${pick?.eventId === f.event_id && pick.idx === f.idx ? "border-brand" : "border-border"}`}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={`/api/events/${f.event_id}/snapshot/${f.idx}`} alt="" className="aspect-video w-full object-cover" loading="lazy" />
@@ -96,7 +96,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
               ))}
             </div>
           </Panel>
-          <p className="font-mono text-[11px] text-text-3">Read-only. EyeAI cannot open doors or control machines.</p>
+          <p className="font-mono text-[11px] text-text-3">Alerts only. EyeAI sends just the alerts an admin has switched on, and logs each one. It is not a safety system.</p>
         </aside>
       </div>
     </>

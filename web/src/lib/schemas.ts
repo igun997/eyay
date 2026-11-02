@@ -17,7 +17,7 @@ export const sourceInput = z
     enabled: z.boolean().default(true),
   })
   .superRefine((v, ctx) => {
-    if (!kindOf(v.url)) ctx.addIssue({ code: "custom", path: ["url"], message: "Use an rtsp:// URL or an http(s) URL ending in .m3u8" });
+    if (!kindOf(v.url)) ctx.addIssue({ code: "custom", path: ["url"], message: "Use a camera address starting with rtsp://, or a web address (http or https) ending in .m3u8" });
   })
   .transform((v) => ({ ...v, kind: kindOf(v.url)! }));
 
@@ -51,11 +51,15 @@ export const incidentAction = z.discriminatedUnion("action", [
 ]);
 
 // ---- behaviour rules (db/migrations/004_behavior_rules.sql) ---------------------------------------------------------
-export const ruleKinds = ["classifier", "indication"] as const;
+export const ruleKinds = ["classifier", "indication", "object"] as const;
 export const indicationKinds = ["appeared", "moving", "lingering", "crowd"] as const;
 export const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
 
-const ruleConfig = z.object({ indication_kind: z.enum(indicationKinds), min_burst_ms: z.number().int().min(0).max(60000) }).partial().strict();
+export const OBJECT_LABELS = ["knife", "scissors", "baseball bat", "bottle", "backpack", "handbag", "suitcase", "cell phone", "umbrella"] as const;
+const ruleConfig = z.object({
+  indication_kind: z.enum(indicationKinds), min_burst_ms: z.number().int().min(0).max(60000),
+  objects: z.array(z.enum(OBJECT_LABELS)).min(1).max(OBJECT_LABELS.length), margin: z.number().min(0).max(1),
+}).partial().strict();
 
 const ruleBase = z.object({
   title: z.string().trim().min(1).max(80),
@@ -72,8 +76,9 @@ const ruleBase = z.object({
 });
 
 const ruleChecks = (v: z.infer<typeof ruleBase>, ctx: z.RefinementCtx) => {
-  if (v.kind === "classifier" && !v.question) ctx.addIssue({ code: "custom", path: ["question"], message: "A classifier rule needs the yes/no question put to the model" });
-  if (v.kind === "indication" && !v.config.indication_kind) ctx.addIssue({ code: "custom", path: ["config", "indication_kind"], message: "An indication rule needs the burst indication it reacts to" });
+  if (v.kind === "classifier" && !v.question) ctx.addIssue({ code: "custom", path: ["question"], message: "A second-AI-check rule needs the yes/no question to ask" });
+  if (v.kind === "indication" && !v.config.indication_kind) ctx.addIssue({ code: "custom", path: ["config", "indication_kind"], message: "An activity-pattern rule needs the activity it reacts to" });
+  if (v.kind === "object" && !v.config.objects?.length) ctx.addIssue({ code: "custom", path: ["config", "objects"], message: "Pick at least one object to look for" });
 };
 
 export const ruleKey = z.string().regex(/^[a-z0-9_]{2,40}$/, "2-40 characters: lowercase letters, digits and _");
@@ -86,11 +91,14 @@ export const ruleUpdate = ruleBase.superRefine(ruleChecks);
 export const normaliseRule = <T extends z.infer<typeof ruleBase>>(v: T) => ({
   ...v,
   question: v.kind === "classifier" ? (v.question ?? null) : null,
-  config: v.kind === "indication" ? v.config : {},
+  config:
+    v.kind === "indication" ? { indication_kind: v.config.indication_kind, min_burst_ms: v.config.min_burst_ms }
+    : v.kind === "object" ? { objects: v.config.objects, margin: v.config.margin ?? 0.3 }
+    : {},
 });
 
 // ---- categories (docs/ENGINE_CONFIG.md "Categories") ------------------------------------------------------------------
-export const categoryLabel = z.string().regex(/^[a-z][a-z0-9 _-]{0,39}$/, "Unknown category label");
+export const categoryLabel = z.string().regex(/^[a-z][a-z0-9 _-]{0,39}$/, "Unknown category");
 export const categoryPatch = z
   .object({
     title: z.string().trim().min(1).max(60),

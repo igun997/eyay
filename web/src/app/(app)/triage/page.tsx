@@ -18,7 +18,7 @@ import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { EmptyState, ErrorState, LoadingList, OfflineBanner } from "@/components/console/states";
 import { api, revalidate, useApi } from "@/hooks/use-api";
 import { dateTime, time } from "@/lib/format";
-import { agreement, clsLabelText } from "@/lib/classification";
+import { agreement, clsLabelText, isSecondCheck } from "@/lib/classification";
 import { dismissReasons } from "@/lib/schemas";
 import type { EventRow, Frame, SourceRow } from "@/lib/types";
 import { FrameStrip } from "@/components/console/frame-strip";
@@ -60,7 +60,7 @@ export default function TriagePage() {
     try {
       const json = decision === "confirm" ? { decision, note: note || undefined } : decision === "dismiss" ? { decision, reason } : { decision };
       await api(`/api/events/${current.id}/review`, { method: "POST", json });
-      toast.success(decision === "confirm" ? `${current.incident_code ?? "Event"} confirmed` : decision === "dismiss" ? "Event dismissed as false alarm" : "Event reopened", {
+      toast.success(decision === "confirm" ? `${current.incident_code ?? "Event"} confirmed` : decision === "dismiss" ? "Event dismissed as a false alarm" : "Event reopened", {
         description: current.incident_code ? `Incident ${current.incident_code} updated.` : undefined });
       setNote(""); setReason(dismissReasons[0]);
       await revalidate("/api/");
@@ -73,12 +73,12 @@ export default function TriagePage() {
         actions={<div className="relative w-80"><Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-text-3" aria-hidden /><Input aria-label="Search events" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events, cameras, IDs" className="h-10 border-border-strong bg-surface pl-9" /></div>} />
       <div className="flex flex-wrap items-center gap-2 px-8 pb-4">
         <FilterSelect label="Camera" value={source} onChange={setSource} options={[{ value: "all", label: "All cameras" }, ...(sources ?? []).map((s) => ({ value: s.id, label: s.code }))]} />
-        <FilterSelect label="Class" value={label} onChange={setLabel} options={["all", "person", "car", "truck", "bus", "motorcycle", "bicycle"].map((v) => ({ value: v, label: v === "all" ? "All" : v }))} />
+        <FilterSelect label="Kind" value={label} onChange={setLabel} options={["all", "person", "car", "truck", "bus", "motorcycle", "bicycle"].map((v) => ({ value: v, label: v === "all" ? "All" : v }))} />
         <FilterSelect label="Severity" value={severity} onChange={setSeverity} options={["all", "CRITICAL", "HIGH", "MEDIUM", "LOW"].map((v) => ({ value: v, label: v === "all" ? "All" : v }))} />
         <div className="ml-auto"><FilterSelect label="Sort" value={sort} onChange={setSort} options={[{ value: "newest", label: "Newest" }, { value: "oldest", label: "Oldest" }]} /></div>
       </div>
       <div role="tablist" className="flex gap-6 border-b border-border px-8">
-        {([["needs_review", "Needs review", data?.counts.needs_review], ["in_pipeline", "In pipeline", data?.counts.in_pipeline], ["resolved", "Resolved", data?.counts.resolved]] as const).map(([k, l, n]) => (
+        {([["needs_review", "Needs review", data?.counts.needs_review], ["in_pipeline", "Being checked", data?.counts.in_pipeline], ["resolved", "Resolved", data?.counts.resolved]] as const).map(([k, l, n]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setSel(null); }}
             className={cn("-mb-px border-b-2 pb-3 text-sm", tab === k ? "border-brand font-medium" : "border-transparent text-text-2")}>
             {l} <span className={cn("ml-1 font-mono text-xs", tab === k ? "text-brand" : "text-text-3")}>{n ?? ""}</span>
@@ -89,7 +89,7 @@ export default function TriagePage() {
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(380px,520px)_1fr]">
         <div className="overflow-y-auto border-r border-border p-4">
           {loading ? <LoadingList /> : error && !data ? <ErrorState onRetry={() => refresh()} message={error.message} /> :
-            events.length === 0 ? <EmptyState title={tab === "needs_review" ? "No events to review" : tab === "in_pipeline" ? "Nothing is being classified" : "Nothing resolved yet"}>New events appear here as soon as a live stream detects something in a category.</EmptyState> :
+            events.length === 0 ? <EmptyState title={tab === "needs_review" ? "No events to review" : tab === "in_pipeline" ? "Nothing is being checked" : "Nothing resolved yet"}>New events appear here as soon as a live camera spots something in a category.</EmptyState> :
               <div className="space-y-3">{events.map((e) => <EventCard key={e.id} event={e} selected={e.id === current?.id} onSelect={() => setSel(e.id)} />)}</div>}
         </div>
         <section className="overflow-y-auto px-8 py-6" aria-label="Event detail">
@@ -104,22 +104,24 @@ export default function TriagePage() {
               {frames && <FrameStrip frames={frames} active={frame?.idx ?? 0} onSelect={setFrameIdx} />}
               <IndicationLine kind={current.indication_kind} text={current.indication} burstMs={current.burst_ms} done={current.burst_done} speedKmh={current.speed_kmh} />
               <div>
-                <p className="caps border-b border-border pb-2">Classification</p>
+                <p className="caps border-b border-border pb-2">What the AI says</p>
                 <div className="flex items-center justify-between border-b border-border py-3">
-                  <div><p className="text-sm font-medium">Edge worker</p><p className="font-mono text-xs text-text-3">YOLOX · live stream · track {current.track_id ?? "–"}</p></div>
-                  <ClassificationBadge label={current.label} confidence={current.confidence} source="EDGE" />
+                  <div><p className="text-sm font-medium">Camera AI</p><p className="font-mono text-xs text-text-3">Looks at the live picture · object {current.track_id ?? "–"}</p></div>
+                  <ClassificationBadge label={current.cls_label === "other" ? `${clsLabelText.other} (${current.label})` : current.label} confidence={current.confidence} source="CAMERA AI" />
                 </div>
-                <div className="flex items-center justify-between border-b border-border py-3">
-                  <div><p className="text-sm font-medium">Server classifier</p>
-                    <p className="font-mono text-xs text-text-3">{current.cls_model ? `${current.cls_model} · fixed classes${current.cls_ms ? ` · ${(current.cls_ms / 1000).toFixed(1)} s` : ""}` : "System One decision model · fixed classes"}</p></div>
-                  {current.cls_label && current.cls_confidence != null
-                    ? <ClassificationBadge label={clsLabelText[current.cls_label]} confidence={current.cls_confidence} source="CLASSIFIER" />
-                    : <PipelineStatusChip status={current.pipeline} />}
-                </div>
-                {current.pipeline === "failed" && current.cls_error && <p className="mt-2 font-mono text-xs text-sev-high">Classifier error: {current.cls_error}</p>}
-                {agreement(current.label, current.cls_label) === "disagree" && (
+                {(isSecondCheck(current.cls_model) || ["queued", "classifying", "failed"].includes(current.pipeline)) && (
+                  <div className="flex items-center justify-between border-b border-border py-3">
+                    <div><p className="text-sm font-medium">Second AI check</p>
+                      <p className="font-mono text-xs text-text-3">{isSecondCheck(current.cls_model) ? `Looks at the saved photo${current.cls_ms ? ` · ${(current.cls_ms / 1000).toFixed(1)} s` : ""}` : "Looks at the saved photo (optional)"}</p></div>
+                    {isSecondCheck(current.cls_model) && current.cls_label && current.cls_confidence != null
+                      ? <ClassificationBadge label={clsLabelText[current.cls_label]} confidence={current.cls_confidence} source="SECOND AI CHECK" />
+                      : <PipelineStatusChip status={current.pipeline} />}
+                  </div>
+                )}
+                {current.pipeline === "failed" && current.cls_error && <p className="mt-2 font-mono text-xs text-sev-high">The second AI check could not finish: {current.cls_error}</p>}
+                {isSecondCheck(current.cls_model) && agreement(current.label, current.cls_label) === "disagree" && (
                   <p role="note" className="mt-3 border-l-2 border-sev-high bg-sev-high/10 p-3 text-sm">
-                    <span className="font-semibold">Classifier disagrees.</span> The detector said {current.label}; the classifier says {clsLabelText[current.cls_label!]}. Check the snapshot before confirming.
+                    <span className="font-semibold">The second AI check disagrees.</span> The camera AI said {current.label}; the second check says {clsLabelText[current.cls_label!]}. Check the photo before confirming.
                   </p>
                 )}
               </div>
@@ -141,7 +143,7 @@ export default function TriagePage() {
                 </>) : <Button variant="outline" onClick={() => review("reopen")}>Reopen for review</Button>}
               </div>
             </div>
-          ) : <EmptyState title="Select an event">Pick an event from the list to see its evidence.</EmptyState>}
+          ) : <EmptyState title="Select an event">Pick an event from the list to see the pictures and details.</EmptyState>}
         </section>
       </div>
 

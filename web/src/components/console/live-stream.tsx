@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { SourceRow } from "@/lib/types";
 
-/** MJPEG with boxes burned in by the worker. Shows NO SIGNAL when the source is not online or the stream errors. */
+/** Live picture with boxes drawn on it. Shows NO SIGNAL when the camera is not online or the picture fails. */
 export function LiveStream({ source, className, compact }: { source: Pick<SourceRow, "id" | "status" | "code" | "name" | "kind">; className?: string; compact?: boolean }) {
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
@@ -36,7 +36,7 @@ export function LiveStream({ source, className, compact }: { source: Pick<Source
             <span className="font-semibold">{source.code}</span><span className="text-text-2">{source.name}</span>
             {live && <span className="flex items-center gap-1 font-semibold"><span className="size-1.5 animate-pulse rounded-full bg-sev-critical" />LIVE</span>}
           </div>
-          <div className="absolute top-3 right-3 rounded-sm bg-black/70 px-2.5 py-1 font-mono text-[11px] tracking-wider text-text-2">{source.kind === "rtsp" ? "RTSP" : "HLS · M3U8"}</div>
+          <div className="absolute top-3 right-3 rounded-sm bg-black/70 px-2.5 py-1 font-mono text-[11px] tracking-wider text-text-2">{source.kind === "rtsp" ? "CAMERA STREAM" : "WEB STREAM"}</div>
         </>
       )}
     </div>

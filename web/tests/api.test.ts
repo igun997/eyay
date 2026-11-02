@@ -111,7 +111,7 @@ describe("PUT /api/sources/[id]/config", () => {
     expect(db.sourceConfig).toEqual({ events: { new_track_gap_s: 8 } });
     const res = await putSourceConfig(json({ classifier: { batch: true } }), ctx({ id: ID }));
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/global only/);
+    expect((await res.json()).error).toMatch(/every camera/);
     expect(db.sourceConfig).toEqual({ events: { new_track_gap_s: 8 } });
     expect((await putSourceConfig(json({ events: { new_track_gap_s: 301 } }), ctx({ id: ID }))).status).toBe(400);
   });

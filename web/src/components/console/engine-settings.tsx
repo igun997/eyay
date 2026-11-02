@@ -10,27 +10,27 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { StatusChip } from "@/components/console/status-chip";
 import { CalibrationEditor } from "@/components/console/calibration-editor";
 import { api } from "@/hooks/use-api";
-import { BUILTIN, SEVERITIES, checkEffective, compact, effective, mergeConfig, parseConfig, type EngineConfig } from "@/lib/engine-config";
+import { BUILTIN, FIELD_LABELS, SEVERITIES, checkEffective, compact, effective, mergeConfig, parseConfig, type EngineConfig } from "@/lib/engine-config";
 import type { SourceRow } from "@/lib/types";
 
 type Group = "detector" | "tracker" | "events" | "calibration" | "classifier";
 type NumField = { group: Group; key: string; label: string; hint: string; min: number; max: number; step: number };
 
 const NUM_FIELDS: NumField[] = [
-  { group: "detector", key: "nms_iou", label: "Duplicate-box overlap (NMS IoU)", hint: "Same-class boxes above this overlap collapse into one.", min: 0.1, max: 0.9, step: 0.05 },
-  { group: "detector", key: "target_fps", label: "Analysed frames per second", hint: "Lower saves CPU, higher catches fast objects.", min: 0.5, max: 15, step: 0.5 },
-  { group: "detector", key: "intra_threads", label: "ONNX threads", hint: "0 lets the runtime decide. Changing it reconnects the stream.", min: 0, max: 32, step: 1 },
-  { group: "tracker", key: "iou_threshold", label: "Track match overlap (IoU)", hint: "Minimum overlap to keep the same track id.", min: 0.05, max: 0.9, step: 0.05 },
-  { group: "tracker", key: "max_age", label: "Track max age (frames)", hint: "Analysed frames a track survives without a match.", min: 0, max: 60, step: 1 },
-  { group: "tracker", key: "min_hits", label: "Frames before an event", hint: "A track must be seen this many times; drops one-frame flicker.", min: 1, max: 10, step: 1 },
-  { group: "events", key: "new_track_gap_s", label: "New-track gap (s)", hint: "0 = off. A track that never produced an event may open one this many seconds after the last event of its label, even during the category cooldown. 5-10 s reports a second person who arrives soon after the first, at the price of more events when the tracker re-ids the same person.", min: 0, max: 300, step: 1 },
-  { group: "classifier", key: "rule_frames", label: "Snapshots the rules look at", hint: "Behaviour rules look at the first N snapshots of the burst; the highest probability wins.", min: 1, max: 6, step: 1 },
-  { group: "classifier", key: "rule_max_queue", label: "Skip rules above this queue", hint: "Rules are skipped while more events than this wait for the classifier.", min: 0, max: 200, step: 1 },
-  { group: "calibration", key: "speed_limit_kmh", label: "Speed limit (km/h)", hint: "Faster tracks are flagged “Over speed limit” for review.", min: 5, max: 300, step: 5 },
+  { group: "detector", key: "nms_iou", label: "Merge overlapping boxes", hint: "Boxes of the same kind that overlap more than this are treated as one object.", min: 0.1, max: 0.9, step: 0.05 },
+  { group: "detector", key: "target_fps", label: "Checks per second", hint: "How many pictures per second the camera AI looks at. Lower saves computer power; higher catches fast objects.", min: 0.5, max: 15, step: 0.5 },
+  { group: "detector", key: "intra_threads", label: "Processing power (0 = automatic)", hint: "How many processor threads this camera may use. 0 lets the system decide. Changing it briefly reconnects the camera.", min: 0, max: 32, step: 1 },
+  { group: "tracker", key: "iou_threshold", label: "How strictly to follow the same object", hint: "Higher: an object has to stay close to where it was to count as the same one.", min: 0.05, max: 0.9, step: 0.05 },
+  { group: "tracker", key: "max_age", label: "How long to remember an object that disappears (checks)", hint: "How many checks an object is remembered after it is lost from view.", min: 0, max: 60, step: 1 },
+  { group: "tracker", key: "min_hits", label: "How many looks before it counts", hint: "An object must be seen this many times before it can create an event. This ignores one-off flickers.", min: 1, max: 10, step: 1 },
+  { group: "events", key: "new_track_gap_s", label: "Quiet-period exception for a new object (seconds)", hint: "0 = off. An object that has not been reported yet may still create an event this many seconds after the last one, even during the quiet period. 5-10 s reports a second person who arrives soon after the first, at the price of more events when the same person is mistaken for a new one.", min: 0, max: 300, step: 1 },
+  { group: "classifier", key: "rule_frames", label: "Follow-up photos to check", hint: "Warning-sign questions look at the first few follow-up photos; the highest answer counts.", min: 1, max: 6, step: 1 },
+  { group: "classifier", key: "rule_max_queue", label: "Skip questions when this many events are waiting", hint: "While more events than this wait for the second AI check, warning-sign questions are skipped.", min: 0, max: 200, step: 1 },
+  { group: "calibration", key: "speed_limit_kmh", label: "Speed limit (km/h)", hint: "Anything faster gets the warning sign “Over speed limit”, for a person to review.", min: 5, max: 300, step: 5 },
 ];
 
-const show = (v: unknown) => (v === undefined || v === null ? "worker decides" : Array.isArray(v) ? `${v.length} points` : String(v));
-const FROM = { camera: "this camera", defaults: "defaults", builtin: "built-in", unset: "" } as const;
+const show = (v: unknown) => (v === undefined || v === null ? "automatic" : Array.isArray(v) ? `${v.length} points` : String(v));
+const FROM = { camera: "this camera", defaults: "the settings for all cameras", builtin: "the standard value", unset: "" } as const;
 
 /** One row: shows what is inherited, lets the admin override, and reset back to inheriting. */
 function Row({ label, hint, from, inheritedText, overridden, onReset, children }: { label: string; hint?: string; from: keyof typeof FROM; inheritedText: string; overridden: boolean; onReset: () => void; children: React.ReactNode }) {
@@ -39,11 +39,11 @@ function Row({ label, hint, from, inheritedText, overridden, onReset, children }
       <div className="min-w-0">
         <p className="text-sm font-medium">{label}</p>
         {hint && <p className="text-xs text-text-2">{hint}</p>}
-        <p className="mt-1 font-mono text-[11px] text-text-3">{overridden ? <>inherited would be <span className="text-text-2">{inheritedText}</span></> : <>inherits <span className="text-text-2">{inheritedText}</span>{from !== "unset" && <> · from {FROM[from]}</>}</>}</p>
+        <p className="mt-1 font-mono text-[11px] text-text-3">{overridden ? <>otherwise <span className="text-text-2">{inheritedText}</span></> : <>uses <span className="text-text-2">{inheritedText}</span>{from !== "unset" && <> · from {FROM[from]}</>}</>}</p>
       </div>
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">{children}</div>
-        <Button type="button" variant="ghost" size="icon" aria-label={`Reset ${label} to inherit`} disabled={!overridden} onClick={onReset} className="size-8"><RotateCcw className="size-3.5" aria-hidden /></Button>
+        <Button type="button" variant="ghost" size="icon" aria-label={`Reset ${label} to the shared value`} disabled={!overridden} onClick={onReset} className="size-8"><RotateCcw className="size-3.5" aria-hidden /></Button>
       </div>
     </div>
   );
@@ -64,7 +64,7 @@ export function EngineConfigForm({ scope, draft, setDraft, defaults, source, onE
     <div className="space-y-5">
       {(["detector", "tracker", "events"] as const).map((g) => (
         <section key={g}>
-          <h3 className="caps border-b border-border pb-2">{g === "detector" ? "Detector" : g === "tracker" ? "Tracker" : "Events"}</h3>
+          <h3 className="caps border-b border-border pb-2">{g === "detector" ? "Camera AI" : g === "tracker" ? "Following objects" : "Events"}</h3>
           {NUM_FIELDS.filter((f) => f.group === g).map((f) => {
             const i = inh(f.group, f.key), v = cur(f.group, f.key);
             return (
@@ -78,7 +78,7 @@ export function EngineConfigForm({ scope, draft, setDraft, defaults, source, onE
       ))}
 
       <section>
-        <h3 className="caps border-b border-border pb-2">Speed</h3>
+        <h3 className="caps border-b border-border pb-2">Speed setup</h3>
         {NUM_FIELDS.filter((f) => f.group === "calibration").map((f) => {
           const i = inh(f.group, f.key), v = cur(f.group, f.key);
           return (
@@ -89,32 +89,32 @@ export function EngineConfigForm({ scope, draft, setDraft, defaults, source, onE
           );
         })}
         {(() => { const i = inh("calibration", "speed_severity"), v = cur("calibration", "speed_severity"); return (
-          <Row label="Over-limit indicator severity" hint="Severity of the “Over speed limit” indicator." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("calibration", "speed_severity", null)}>
-            <select aria-label="Over-limit indicator severity" value={(v as string | null | undefined) ?? ""} onChange={(e) => put("calibration", "speed_severity", e.target.value || null)} className="h-8 w-full rounded-sm border border-border-strong bg-background px-2 text-sm">
-              <option value="">inherit</option>{SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+          <Row label="How serious an over-limit warning is" hint="Severity of the warning sign “Over speed limit”." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("calibration", "speed_severity", null)}>
+            <select aria-label="How serious an over-limit warning is" value={(v as string | null | undefined) ?? ""} onChange={(e) => put("calibration", "speed_severity", e.target.value || null)} className="h-8 w-full rounded-sm border border-border-strong bg-background px-2 text-sm">
+              <option value="">Use the shared value</option>{SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </Row>); })()}
         {(() => { const i = inh("calibration", "show_geometry"), v = cur("calibration", "show_geometry"); return (
-          <Row label="Draw the geometry on the live view" hint="Turn off once the lines are tuned." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("calibration", "show_geometry", null)}>
-            <Switch aria-label="Draw the geometry on the live view" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? true} onCheckedChange={(c) => put("calibration", "show_geometry", c)} />
+          <Row label="Show the lines on the live view" hint="Turn off once the lines are in the right place." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("calibration", "show_geometry", null)}>
+            <Switch aria-label="Show the lines on the live view" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? true} onCheckedChange={(c) => put("calibration", "show_geometry", c)} />
           </Row>); })()}
         {scope === "camera" && source && (
           <div className="flex items-center justify-between gap-4 py-3">
-            <div><p className="text-sm font-medium">Measurement</p>
-              <p className="text-xs text-text-2">{method === "line" ? `Two lines · ${cal.line_axis === "y" ? "up-down" : "left-right"} motion · ${cal.distance_m ?? "?"} m apart` : method === "homography" ? "Four road corners" : "Off: no speeds are estimated"}</p></div>
-            <Button type="button" variant="outline" onClick={onEditGeometry}>Edit on snapshot</Button>
+            <div><p className="text-sm font-medium">Speed measurement</p>
+              <p className="text-xs text-text-2">{method === "line" ? `Two lines · ${cal.line_axis === "y" ? "up-down" : "left-right"} motion · ${cal.distance_m ?? "?"} m apart` : method === "homography" ? "Angled view (four corners)" : "Off: no speeds are estimated"}</p></div>
+            <Button type="button" variant="outline" onClick={onEditGeometry}>Set up on a camera picture</Button>
           </div>
         )}
-        {scope === "defaults" && <p className="py-3 text-xs text-text-2">Lines and road corners belong to one camera: set them from that camera’s engine settings.</p>}
+        {scope === "defaults" && <p className="py-3 text-xs text-text-2">The lines and corners belong to one camera: set them in that camera’s settings.</p>}
       </section>
 
       {scope === "defaults" && (
         <section>
-          <h3 className="caps border-b border-border pb-2">Classifier <StatusChip className="ml-2 align-middle">GLOBAL</StatusChip></h3>
-          <p className="py-2 text-xs text-text-2">One classifier loop serves every camera, so these cannot be set per camera. Empty uses the CLASSIFIER_* environment variables. Applies within 30 s.</p>
+          <h3 className="caps border-b border-border pb-2">Second AI check <StatusChip className="ml-2 align-middle">ALL CAMERAS</StatusChip></h3>
+          <p className="py-2 text-xs text-text-2">One second AI check serves every camera, so these cannot be set per camera. Empty fields use the installation’s standard values. Applied within 30 seconds.</p>
           {(() => { const i = inh("classifier", "rules_enabled"), v = cur("classifier", "rules_enabled"); return (
-            <Row label="Behaviour rules" hint="Off: only the person / vehicle / false_alarm class is asked, no behaviour rules." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("classifier", "rules_enabled", null)}>
-              <Switch aria-label="Behaviour rules" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? true} onCheckedChange={(c) => put("classifier", "rules_enabled", c)} />
+            <Row label="Warning-sign questions" hint="Off: the second AI check only says person, vehicle or not a real detection, and asks no warning-sign questions." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("classifier", "rules_enabled", null)}>
+              <Switch aria-label="Warning-sign questions" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? true} onCheckedChange={(c) => put("classifier", "rules_enabled", c)} />
             </Row>); })()}
           {NUM_FIELDS.filter((f) => f.group === "classifier").map((f) => {
             const i = inh(f.group, f.key), v = cur(f.group, f.key);
@@ -126,8 +126,8 @@ export function EngineConfigForm({ scope, draft, setDraft, defaults, source, onE
             );
           })}
           {(() => { const i = inh("classifier", "batch"), v = cur("classifier", "batch"); return (
-            <Row label="Batch rule questions" hint="On: all rule questions in one request (faster). Ollama d1 on CPU crashes with 2 or more questions in one request: leave it off unless the classifier is a GPU server you have tested." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("classifier", "batch", null)}>
-              <Switch aria-label="Batch rule questions" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? false} onCheckedChange={(c) => put("classifier", "batch", c)} />
+            <Row label="Ask all questions at once" hint="On is faster. Some small local setups of the second AI check crash when asked several questions at once: leave it off unless it runs on a server you have tested." from={i.from} inheritedText={show(i.value)} overridden={v != null} onReset={() => put("classifier", "batch", null)}>
+              <Switch aria-label="Ask all questions at once" checked={(v as boolean | undefined) ?? (i.value as boolean | undefined) ?? false} onCheckedChange={(c) => put("classifier", "batch", c)} />
             </Row>); })()}
         </section>
       )}
@@ -154,7 +154,7 @@ export function EngineSettingsDialog({ open, onOpenChange, source, defaults, onS
     setBusy(true); setErr(null);
     try {
       await api(`/api/sources/${source.id}/config`, { method: "PUT", json: compact(draft) });
-      toast.success(`${source.code} engine settings saved`, { description: "The worker applies them within about 5 seconds. Changing ONNX threads reconnects the stream." });
+      toast.success(`${source.code} settings saved`, { description: "Applied within about 5 seconds. Changing processing power briefly reconnects the camera." });
       onSaved(); onOpenChange(false);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
@@ -164,13 +164,13 @@ export function EngineSettingsDialog({ open, onOpenChange, source, defaults, onS
       <Dialog open={open && !geom} onOpenChange={onOpenChange}>
         <DialogContent className="max-h-[92vh] sm:max-w-2xl overflow-y-auto rounded-lg border-border bg-surface-2">
           <DialogHeader>
-            <DialogTitle>Engine settings · {source.code}</DialogTitle>
-            <DialogDescription>Each field inherits the defaults until you override it. Reset a field to inherit again.</DialogDescription>
+            <DialogTitle>Camera AI settings · {source.code}</DialogTitle>
+            <DialogDescription>Each field uses the settings for all cameras until you change it here. Reset a field to use the shared value again.</DialogDescription>
           </DialogHeader>
           <EngineConfigForm scope="camera" draft={draft} setDraft={setDraft} defaults={defaults} source={source} onEditGeometry={() => setGeom(true)} />
           {(err || problems.length > 0) && <ul role="alert" className="space-y-1 rounded-sm border border-sev-critical/40 bg-sev-critical/10 p-3 text-sm text-sev-critical">{[...(err ? [err] : []), ...problems].map((p) => <li key={p}>{p}</li>)}</ul>}
           <DialogFooter className="items-center sm:justify-between">
-            <span className="font-mono text-xs text-text-3">{lines(draft)} override{lines(draft) === 1 ? "" : "s"}</span>
+            <span className="font-mono text-xs text-text-3">{lines(draft)} setting{lines(draft) === 1 ? "" : "s"} changed for this camera</span>
             <span className="flex gap-2"><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="button" disabled={busy || problems.length > 0} onClick={save}>Save settings</Button></span>
           </DialogFooter>
         </DialogContent>
@@ -191,7 +191,7 @@ export function EngineDefaultsDialog({ open, onOpenChange, defaults, onSaved }: 
     setBusy(true); setErr(null);
     try {
       await api("/api/settings/engine", { method: "PUT", json: compact(draft) });
-      toast.success("Engine defaults saved", { description: "Cameras that do not override a field pick it up within about 5 seconds." });
+      toast.success("Settings for all cameras saved", { description: "Cameras without their own value pick them up within about 5 seconds." });
       onSaved(); onOpenChange(false);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
@@ -199,12 +199,12 @@ export function EngineDefaultsDialog({ open, onOpenChange, defaults, onSaved }: 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] sm:max-w-2xl overflow-y-auto rounded-lg border-border bg-surface-2">
         <DialogHeader>
-          <DialogTitle>Engine defaults <StatusChip className="ml-2 align-middle">ALL CAMERAS</StatusChip></DialogTitle>
-          <DialogDescription>Applies to every camera that does not override the field. An empty field uses the worker’s built-in value.</DialogDescription>
+          <DialogTitle>Settings for all cameras <StatusChip className="ml-2 align-middle">SHARED</StatusChip></DialogTitle>
+          <DialogDescription>Used by every camera that does not have its own value. An empty field uses the standard value.</DialogDescription>
         </DialogHeader>
         <EngineConfigForm scope="defaults" draft={draft} setDraft={setDraft} defaults={{}} />
         {(err || problems.length > 0) && <ul role="alert" className="space-y-1 rounded-sm border border-sev-critical/40 bg-sev-critical/10 p-3 text-sm text-sev-critical">{[...(err ? [err] : []), ...problems].map((p) => <li key={p}>{p}</li>)}</ul>}
-        <DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="button" disabled={busy || problems.length > 0} onClick={save}>Save defaults</Button></DialogFooter>
+        <DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="button" disabled={busy || problems.length > 0} onClick={save}>Save for all cameras</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -213,6 +213,6 @@ export function EngineDefaultsDialog({ open, onOpenChange, defaults, onSaved }: 
 /** Compact summary shown on the Sources page: what this camera overrides. */
 export function overrideSummary(c: EngineConfig | undefined): string[] {
   const out: string[] = [];
-  for (const [g, leaves] of Object.entries(compact(c))) for (const [k, v] of Object.entries(leaves as object)) out.push(`${g}.${k} = ${Array.isArray(v) ? `${v.length} points` : String(v)}`);
+  for (const [g, leaves] of Object.entries(compact(c))) for (const [k, v] of Object.entries(leaves as object)) out.push(`${FIELD_LABELS[`${g}.${k}`] ?? k}: ${Array.isArray(v) ? `${v.length} points` : String(v)}`);
   return out;
 }

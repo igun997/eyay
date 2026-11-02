@@ -3,7 +3,7 @@ export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type EventStatus = "ready_for_triage" | "confirmed" | "dismissed";
 export type IncidentStatus = "open" | "acknowledged" | "resolved";
 export type Pipeline = "queued" | "classifying" | "ready" | "failed" | "skipped";
-export type ClsLabel = "person" | "vehicle" | "false_alarm";
+export type ClsLabel = "person" | "vehicle" | "false_alarm" | "other";
 export type IndicationKind = "appeared" | "moving" | "lingering" | "crowd";
 export type SourceStatus = "pending" | "connecting" | "online" | "offline" | "error";
 export type SourceKind = "rtsp" | "m3u8";
@@ -52,9 +52,9 @@ export type Flag = { rule: string; title: string; prob: number | null; threshold
 export type Frame = { event_id: string; idx: number; offset_ms: number; bbox: BBox | null };
 
 export type BehaviorRule = {
-  key: string; title: string; description: string; kind: "classifier" | "indication"; question: string | null;
+  key: string; title: string; description: string; kind: "classifier" | "indication" | "object"; question: string | null;
   applies_to: string[]; threshold: number; severity: Severity; opens_incident: boolean; enabled: boolean;
-  config: { indication_kind?: IndicationKind; min_burst_ms?: number }; position: number;
+  config: { indication_kind?: IndicationKind; min_burst_ms?: number; objects?: string[]; margin?: number }; position: number;
 };
 
 export type IncidentRow = {

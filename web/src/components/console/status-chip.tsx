@@ -30,10 +30,10 @@ export const IncidentStatusChip = ({ status }: { status: keyof typeof incident }
 
 export type PipelineKey = keyof typeof pipeline;
 const pipeline = {
-  received: [Inbox, "RECEIVED", "neutral"], queued: [Hourglass, "QUEUED", "neutral"],
-  classifying: [Loader2, "CLASSIFYING", "neutral"], ready_for_triage: [CheckCircle2, "READY FOR TRIAGE", "accent"], ready: [CheckCircle2, "READY FOR TRIAGE", "accent"],
+  received: [Inbox, "RECEIVED", "neutral"], queued: [Hourglass, "WAITING FOR SECOND CHECK", "neutral"],
+  classifying: [Loader2, "SECOND CHECK RUNNING", "neutral"], ready_for_triage: [CheckCircle2, "READY FOR TRIAGE", "accent"], ready: [CheckCircle2, "READY FOR TRIAGE", "accent"],
   confirmed: [CheckCircle2, "CONFIRMED", "ok"], dismissed: [CheckCircle2, "DISMISSED", "neutral"],
-  failed: [AlertTriangle, "CLASSIFIER FAILED", "warn"], skipped: [MinusCircle, "NOT CLASSIFIED", "neutral"],
+  failed: [AlertTriangle, "SECOND CHECK FAILED", "warn"], skipped: [MinusCircle, "NO SECOND CHECK", "neutral"],
 } as const;
 export function PipelineStatusChip({ status }: { status: PipelineKey }) {
   const [Icon, label, tone] = pipeline[status];

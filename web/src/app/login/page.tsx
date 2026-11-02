@@ -3,8 +3,8 @@ import { Logo } from "@/components/console/logo";
 import { LoginForm } from "./login-form";
 
 const steps = [
-  ["01", "RTSP / M3U8 SOURCE", "Admin registers a live stream.", "Worker listens continuously · no raw video upload"],
-  ["02", "LIVE DETECTION", "Detects people and vehicles in each frame.", "Bounding boxes visible live · tracked across frames"],
+  ["01", "LIVE CAMERA", "An admin adds a live camera.", "Watched continuously · no raw video is uploaded"],
+  ["02", "LIVE DETECTION", "Spots people and vehicles in each picture.", "Boxes shown live · followed from picture to picture"],
   ["03", "TRIAGE", "Security confirms or dismisses, with evidence attached.", "Every decision recorded in the audit log"],
 ];
 
@@ -33,7 +33,7 @@ export default function LoginPage() {
           ))}
         </ol>
         <dl className="grid grid-cols-3 gap-6 border-t border-border pt-6">
-          {[["Physical actions", "None. Read-only."], ["Video leaving site", "Snapshots only"], ["Live view", "Boxes drawn live"]].map(([k, v]) => (
+          {[["Outputs", "Only the alerts you switch on, always logged"], ["Video leaving site", "Photos only"], ["Live view", "Boxes drawn live"]].map(([k, v]) => (
             <div key={k}><dt className="caps">{k}</dt><dd className="mt-1 font-medium">{v}</dd></div>
           ))}
         </dl>

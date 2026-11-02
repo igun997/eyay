@@ -73,8 +73,8 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] sm:max-w-4xl overflow-y-auto rounded-lg border-border bg-surface-2">
         <DialogHeader>
-          <DialogTitle>Speed calibration · {source.code}</DialogTitle>
-          <DialogDescription>Drag the lines (or the four corners) over the camera still, then enter what you measured on site. The worker applies it within about 5 seconds of saving.</DialogDescription>
+          <DialogTitle>Speed setup · {source.code}</DialogTitle>
+          <DialogDescription>Drag the lines (or the four corners) over the camera picture, then enter what you measured on site. It is applied within about 5 seconds of saving.</DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-5 lg:grid-cols-[1fr_280px]">
@@ -82,11 +82,11 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
             <div ref={box} className="relative select-none overflow-hidden rounded-sm bg-black" onPointerMove={onMove} onPointerUp={() => setDrag(null)} onPointerLeave={() => setDrag(null)}>
               {!imgFailed ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img key={nonce} src={`/api/live/${source.id}?mode=snapshot&t=${nonce}`} alt={`Latest frame of ${source.code}`} className="block w-full" draggable={false} onError={() => setImgFailed(true)} />
+                <img key={nonce} src={`/api/live/${source.id}?mode=snapshot&t=${nonce}`} alt={`Latest picture of ${source.code}`} className="block w-full" draggable={false} onError={() => setImgFailed(true)} />
               ) : (
-                <div className="grid aspect-video place-items-center p-6 text-center text-sm text-text-2">No frame available. The stream must be online to draw on it; you can still type the values.</div>
+                <div className="grid aspect-video place-items-center p-6 text-center text-sm text-text-2">No picture available. The camera must be online to draw on it; you can still type the values.</div>
               )}
-              <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 size-full touch-none" aria-label="Calibration geometry">
+              <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="absolute inset-0 size-full touch-none" aria-label="Speed setup lines">
                 {method === "line" && [d.line1, d.line2].map((v, i) => v != null && (
                   <line key={i} {...lineStyle(v)} stroke="var(--accent)" strokeWidth={0.004} vectorEffect="non-scaling-stroke" style={{ strokeWidth: 2 }} />
                 ))}
@@ -106,25 +106,25 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
               ))}
             </div>
             <div className="mt-2 flex items-center justify-between text-xs text-text-2">
-              <span>{method === "none" ? "Speed measurement is off for this camera." : method === "line" ? "Lines should be roughly perpendicular to the traffic; a diagonal path reads low." : "Corners go clockwise from the bottom-left of the road patch."}</span>
-              <Button type="button" variant="ghost" size="sm" onClick={() => { setImgFailed(false); setNonce((n) => n + 1); }}><RefreshCw className="size-3.5" aria-hidden /> Refresh frame</Button>
+              <span>{method === "none" ? "Speed measurement is off for this camera." : method === "line" ? "Draw the lines straight across the traffic. A diagonal path reads too slow." : "Number the corners clockwise, starting at the bottom left of the stretch of road."}</span>
+              <Button type="button" variant="ghost" size="sm" onClick={() => { setImgFailed(false); setNonce((n) => n + 1); }}><RefreshCw className="size-3.5" aria-hidden /> Refresh picture</Button>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="cal-method">Method</Label>
+              <Label htmlFor="cal-method">How to measure</Label>
               <select id="cal-method" value={method} onChange={(e) => pickMethod(e.target.value as NonNullable<Calibration["method"]>)} className="h-9 w-full rounded-sm border border-border-strong bg-background px-2 text-sm">
-                <option value="none">Off</option><option value="line">Two lines</option><option value="homography">Road corners (angled view)</option>
+                <option value="none">Off</option><option value="line">Two lines</option><option value="homography">Angled view (four corners)</option>
               </select>
             </div>
 
             {method === "line" && (
               <>
                 <div className="space-y-2">
-                  <Label htmlFor="cal-axis">Measures</Label>
+                  <Label htmlFor="cal-axis">What it measures</Label>
                   <select id="cal-axis" value={axis} onChange={(e) => set({ line_axis: e.target.value as "x" | "y" })} className="h-9 w-full rounded-sm border border-border-strong bg-background px-2 text-sm">
-                    <option value="x">Left-right motion (vertical lines)</option><option value="y">Up-down motion (horizontal lines)</option>
+                    <option value="x">Left-to-right movement (upright lines)</option><option value="y">Up-and-down movement (flat lines)</option>
                   </select>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -133,14 +133,14 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
                       <Input id={`cal-${k}`} type="number" step={0.01} min={0} max={1} value={d[k] ?? ""} onChange={(e) => set({ [k]: num(e.target.value) })} className="border-border-strong bg-background font-mono" /></div>
                   ))}
                 </div>
-                <div className="space-y-2"><Label htmlFor="cal-dist">Real distance between the lines (m)</Label>
+                <div className="space-y-2"><Label htmlFor="cal-dist">Real distance between the lines (metres)</Label>
                   <Input id="cal-dist" type="number" step={0.5} min={0.5} max={1000} value={d.distance_m ?? ""} onChange={(e) => set({ distance_m: num(e.target.value) })} placeholder="measure it on site" className="border-border-strong bg-background font-mono" /></div>
               </>
             )}
 
             {method === "homography" && (
               <div className="space-y-2">
-                <p className="text-sm font-medium">Corners in metres</p>
+                <p className="text-sm font-medium">The same corners in metres</p>
                 <table className="w-full text-sm">
                   <thead><tr className="text-left"><th className="caps py-1 font-normal">#</th><th className="caps py-1 font-normal">Corner</th><th className="caps py-1 font-normal">X (m)</th><th className="caps py-1 font-normal">Y (m)</th></tr></thead>
                   <tbody>{world.map((w, i) => (
@@ -150,7 +150,7 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
                       ))}</tr>
                   ))}</tbody>
                 </table>
-                <p className="text-xs text-text-3">The starting values are placeholders: replace them with the real size of the road patch.</p>
+                <p className="text-xs text-text-3">The starting values are only examples: replace them with the real size of the stretch of road.</p>
                 <div className="space-y-2"><Label htmlFor="cal-smooth">Smoothing <span className="ml-2 font-mono text-xs text-text-2">{(d.smoothing ?? 0.4).toFixed(2)}</span></Label>
                   <input id="cal-smooth" type="range" min={0} max={1} step={0.05} value={d.smoothing ?? 0.4} onChange={(e) => set({ smoothing: Number(e.target.value) })} className="w-full accent-[var(--accent)]" /></div>
               </div>
@@ -159,7 +159,7 @@ export function CalibrationEditor({ open, onOpenChange, source, value, inherited
             {method !== "none" && (
               <p role="note" className="border-l-2 border-sev-high bg-sev-high/10 p-3 text-xs text-text-2">
                 <span className="font-semibold text-foreground">Every speed depends on this measurement.</span>{" "}
-                {method === "line" ? "The distance scales every speed linearly: if it is wrong by a factor of two, every reported speed is wrong by the same factor." : "A mis-measured road patch scales every speed the same way."} Speeds are estimates for a person to review, not verdicts.
+                {method === "line" ? "The distance scales every speed linearly: if it is wrong by a factor of two, every reported speed is wrong by the same factor." : "A wrongly measured stretch of road makes every speed wrong in the same way."} Speeds are estimates for a person to check, never a verdict.
               </p>
             )}
             {errors.length > 0 && (

@@ -20,7 +20,7 @@ export const PATCH = route<{ id: string }>(async (req, { params }) => {
   const set = (col: string, val: unknown) => { p.push(val); sets.push(`${col} = $${p.length}`); };
   if (v.url !== undefined) {
     const kind = kindOf(v.url);
-    if (!kind) throw new HttpError(400, "Use an rtsp:// URL or an http(s) URL ending in .m3u8");
+    if (!kind) throw new HttpError(400, "Use a camera address starting with rtsp://, or a web address (http or https) ending in .m3u8");
     set("url", v.url); set("kind", kind);
   }
   for (const k of ["name", "labels", "min_confidence", "enabled"] as const) if (v[k] !== undefined) set(k, v[k]);

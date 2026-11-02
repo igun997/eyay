@@ -9,7 +9,7 @@ export function DetectionImage({ src, bbox, label, confidence, className, showTa
   return (
     <div className={cn("relative aspect-video overflow-hidden rounded-sm bg-black", className)}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={label ? `${label} detection` : "snapshot"} className="size-full object-contain" />
+      <img src={src} alt={label ? `${label} detection` : "saved photo"} className="size-full object-contain" />
       {bbox && (
         <div className="absolute border-2 border-brand" style={{ left: `${bbox.x * 100}%`, top: `${bbox.y * 100}%`, width: `${bbox.w * 100}%`, height: `${bbox.h * 100}%` }}>
           {showTag && label && (

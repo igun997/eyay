@@ -67,7 +67,7 @@ describe("merge and inheritance", () => {
 describe("checkEffective: the config a camera really runs with", () => {
   it("a line needs both lines and a measured distance (it scales every speed)", () => {
     expect(checkEffective({ calibration: { method: "line" } }).length).toBeGreaterThan(0);
-    expect(checkEffective({ calibration: { method: "line", line1: 0.4, line2: 0.7 } }).join()).toMatch(/distance_m/);
+    expect(checkEffective({ calibration: { method: "line", line1: 0.4, line2: 0.7 } }).join()).toMatch(/real distance/);
     expect(checkEffective({ calibration: { method: "line", line1: 0.4, line2: 0.7, distance_m: 12 } })).toEqual([]);
   });
   it("inherited geometry counts: a camera may only switch the method on", () => {

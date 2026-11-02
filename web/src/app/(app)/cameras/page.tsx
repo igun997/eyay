@@ -21,16 +21,16 @@ export default function CamerasPage() {
   const online = cams.filter((c) => c.status === "online").length;
   return (
     <>
-      <PageHeader title="Cameras" subtitle={`${cams.length} streams registered · ${online} live · detections drawn live on the stream`} />
+      <PageHeader title="Cameras" subtitle={`${cams.length} camera${cams.length === 1 ? "" : "s"} added · ${online} live · what the camera AI spots is drawn on the live picture`} />
       {cams.length === 0 ? (
-        <EmptyState title="No streams registered" action={me?.role === "admin" ? <Button asChild><Link href="/sources">Add source</Link></Button> : undefined}>
-          {me?.role === "admin" ? "Register an RTSP or M3U8 URL and the worker starts listening." : "Ask an administrator to register a stream."}
+        <EmptyState title="No cameras added yet" action={me?.role === "admin" ? <Button asChild><Link href="/sources">Add a camera</Link></Button> : undefined}>
+          {me?.role === "admin" ? "Add a camera’s live address and the analysis service starts watching it." : "Ask an administrator to add a camera."}
         </EmptyState>
       ) : (
         <div className="grid gap-5 px-8 pb-10 xl:grid-cols-[1fr_340px]">
           <div className="space-y-3">
             {cur && <LiveStream source={cur} />}
-            {cur && <p className="font-mono text-xs text-text-2">{cur.code} · {cur.status === "online" ? `${cur.fps?.toFixed(1) ?? "–"} fps · inference ${cur.inference_ms?.toFixed(0) ?? "–"} ms` : cur.last_error ?? cur.status}</p>}
+            {cur && <p className="font-mono text-xs text-text-2">{cur.code} · {cur.status === "online" ? `${cur.fps?.toFixed(1) ?? "–"} checks per second · ${cur.inference_ms?.toFixed(0) ?? "–"} ms per check` : cur.last_error ?? cur.status}</p>}
           </div>
           <Panel title={`Cameras · ${cams.length}`} bodyClassName="grid grid-cols-2 gap-3 p-3">
             {cams.map((c) => (

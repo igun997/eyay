@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, AlertTriangle, Inbox, LayoutGrid, LogOut, SlidersHorizontal, Users, Video, type LucideIcon } from "lucide-react";
+import { Activity, AlertTriangle, BellRing, Inbox, LayoutGrid, LogOut, SlidersHorizontal, Users, Video, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { can, type Role } from "@/lib/roles";
 import { Logo } from "@/components/console/logo";
@@ -13,8 +13,9 @@ const ITEMS: Item[] = [
   { href: "/triage", label: "Triage", icon: Inbox, badge: "awaiting" },
   { href: "/incidents", label: "Incidents", icon: AlertTriangle, badge: "open_incidents" },
   { href: "/cameras", label: "Cameras", icon: Video },
-  { href: "/sources", label: "Sources & health", icon: Activity },
+  { href: "/sources", label: "Camera setup", icon: Activity },
   { href: "/rules", label: "Rules", icon: SlidersHorizontal },
+  { href: "/alerts", label: "Alerts", icon: BellRing },
   { href: "/users", label: "Users", icon: Users },
 ];
 

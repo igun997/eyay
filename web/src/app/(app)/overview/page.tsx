@@ -36,12 +36,12 @@ export default function OverviewPage() {
   const filtered = c.events_24h ? Math.round(((c.dismissed_24h) / c.events_24h) * 100) : 0;
   return (
     <>
-      <PageHeader title="Overview" subtitle={`${c.open_incidents} open incidents · ${c.awaiting} awaiting triage · ${c.online} of ${c.total} streams online`} />
+      <PageHeader title="Overview" subtitle={`${c.open_incidents} open incidents · ${c.awaiting} awaiting triage · ${c.online} of ${c.total} cameras online`} />
       {offline && <OfflineBanner />}
       <div className="grid gap-5 px-8 pb-10 xl:grid-cols-[1fr_380px]">
         <div className="space-y-5">
           <Panel title="Needs attention" aside="Open incidents, most urgent first">
-            {data.attention.length === 0 ? <EmptyState title="No open incidents">New incidents appear here as soon as a detection enters a category.</EmptyState> : (
+            {data.attention.length === 0 ? <EmptyState title="No open incidents">New incidents appear here as soon as a camera spots something that opens one.</EmptyState> : (
               <ul className="divide-y divide-border">
                 {data.attention.map((i) => (
                   <li key={i.id}>
@@ -70,7 +70,7 @@ export default function OverviewPage() {
             <Bar label="Confirmed" value={c.confirmed_24h} max={c.events_24h} tone="bg-brand" />
           </Panel>
 
-          <Panel title="Classification pipeline" aside={data.worker?.classifier ? <span className="font-mono">{data.worker.classifier}</span> : <span className="font-mono">classifier not configured</span>} bodyClassName="flex flex-wrap items-center gap-x-6 gap-y-3 p-5">
+          <Panel title="Second AI check" aside={data.worker?.classifier ? <span className="font-mono">on</span> : <span className="font-mono">not switched on (optional)</span>} bodyClassName="flex flex-wrap items-center gap-x-6 gap-y-3 p-5">
             {([["queued", data.pipeline.queued], ["classifying", data.pipeline.classifying], ["ready", data.pipeline.ready], ["failed", data.pipeline.failed]] as const).map(([k, n]) => (
               <span key={k} className="flex items-center gap-2"><PipelineStatusChip status={k} /><span className="font-mono text-sm">{n}</span></span>
             ))}
@@ -84,16 +84,15 @@ export default function OverviewPage() {
         </div>
 
         <div className="space-y-5">
-          <Panel title="Live sources" bodyClassName="p-5 space-y-4">
+          <Panel title="Live cameras" bodyClassName="p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-lg font-semibold">Streams</span>
+              <span className="text-lg font-semibold">Cameras</span>
               <StatusChip tone={c.online === c.total && c.total > 0 ? "ok" : "warn"} dot>{c.online === c.total && c.total > 0 ? "HEALTHY" : "DEGRADED"}</StatusChip>
             </div>
             <dl className="grid grid-cols-2 gap-4">
               <div><dt className="caps">Online</dt><dd className="mt-1 font-mono">{c.online} / {c.total}</dd></div>
-              <div><dt className="caps">Worker</dt><dd className="mt-1 font-mono">{workerOk ? `OK · ${worker!.sources} running` : "DOWN"}</dd></div>
+              <div><dt className="caps">Analysis service</dt><dd className="mt-1 font-mono">{workerOk ? `OK · ${worker!.sources} cameras watched` : "NOT RESPONDING"}</dd></div>
             </dl>
-            {worker?.model && <p className="font-mono text-[11px] text-text-3">Model {worker.model.split("/").pop()}</p>}
           </Panel>
         </div>
       </div>
