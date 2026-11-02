@@ -5,6 +5,7 @@ import { SeverityPill } from "./severity-pill";
 import { ClassificationBadge } from "./classification-badge";
 import { PipelineStatusChip, StatusChip } from "./status-chip";
 import { clsLabelText } from "@/lib/classification";
+import { SpeedChip } from "./indicators";
 
 export function EventCard({ event, selected, onSelect }: { event: EventRow; selected?: boolean; onSelect?: () => void }) {
   return (
@@ -28,6 +29,7 @@ export function EventCard({ event, selected, onSelect }: { event: EventRow; sele
           <ClassificationBadge label={event.label} confidence={event.confidence} source="EDGE" />
           {event.cls_label && event.cls_confidence != null && <ClassificationBadge label={clsLabelText[event.cls_label]} confidence={event.cls_confidence} source="CLASSIFIER" />}
           {event.suspicious && <StatusChip tone="warn" dot title={event.cls_flags.filter((f) => f.triggered).map((f) => f.title).join(", ")}>INDICATOR · {event.cls_flags.filter((f) => f.triggered).length}</StatusChip>}
+          <SpeedChip kmh={event.speed_kmh} />
           {(event.pipeline === "queued" || event.pipeline === "classifying") && <PipelineStatusChip status={event.pipeline} />}
         </div>
       </div>

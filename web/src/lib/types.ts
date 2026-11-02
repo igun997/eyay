@@ -1,3 +1,4 @@
+import type { EngineConfig } from "./engine-config";
 export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type EventStatus = "ready_for_triage" | "confirmed" | "dismissed";
 export type IncidentStatus = "open" | "acknowledged" | "resolved";
@@ -41,6 +42,8 @@ export type EventRow = {
   burst_done: boolean;
   cls_flags: Flag[];
   suspicious: boolean;
+  /** Estimated speed once the track crossed the calibrated geometry (docs/ENGINE_CONFIG.md "Speed"). */
+  speed_kmh: number | null;
 };
 
 /** One evaluated behaviour rule for an event (stored in events.cls_flags). */
@@ -51,6 +54,7 @@ export type Frame = { event_id: string; idx: number; offset_ms: number; bbox: BB
 export type BehaviorRule = {
   key: string; title: string; description: string; kind: "classifier" | "indication"; question: string | null;
   applies_to: string[]; threshold: number; severity: Severity; opens_incident: boolean; enabled: boolean;
+  config: { indication_kind?: IndicationKind; min_burst_ms?: number }; position: number;
 };
 
 export type IncidentRow = {
@@ -94,6 +98,8 @@ export type SourceRow = {
   last_seen: string | null;
   fps: number | null;
   inference_ms: number | null;
+  /** Per-camera engine overrides (docs/ENGINE_CONFIG.md); empty = inherit everything. */
+  config: EngineConfig;
 };
 
 export type CategoryRow = {

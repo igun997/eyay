@@ -16,3 +16,6 @@ export const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** "now" / "5m ago": never "now ago". */
 export const agoText = (iso: string | null | undefined) => { const a = ago(iso); return a === "now" || a === "never" ? a : `${a} ago`; };
+
+/** Estimated speed rounded to whole km/h. */
+export const formatSpeed = (kmh: number) => `${Math.round(kmh)} km/h`;

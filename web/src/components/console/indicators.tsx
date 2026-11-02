@@ -1,16 +1,27 @@
-import { AlertOctagon, Eye, MoveRight, Users, type LucideIcon } from "lucide-react";
+import { AlertOctagon, Eye, Gauge, MoveRight, Users, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Flag, IndicationKind } from "@/lib/types";
 import { SeverityPill } from "./severity-pill";
+import { formatSpeed } from "@/lib/format";
 
 const KIND: Record<IndicationKind, { icon: LucideIcon; label: string }> = {
   appeared: { icon: Eye, label: "APPEARED" }, moving: { icon: MoveRight, label: "MOVING" },
   lingering: { icon: Eye, label: "LINGERING" }, crowd: { icon: Users, label: "CROWD" },
 };
 
+/** Estimated speed (km/h) of the tracked object; an estimate for review, scaled by the camera's measured calibration distance. */
+export function SpeedChip({ kmh, className }: { kmh: number | null | undefined; className?: string }) {
+  if (kmh == null) return null;
+  return (
+    <span title="Estimated speed, for review" className={cn("inline-flex h-5 items-center gap-1.5 rounded-sm border border-border-strong px-2 font-mono text-[11px] tracking-wider whitespace-nowrap text-text-2", className)}>
+      <Gauge className="size-3" aria-hidden />{formatSpeed(kmh)}
+    </span>
+  );
+}
+
 /** What the snapshot burst shows (derived by the worker from the track). */
-export function IndicationLine({ kind, text, burstMs, done }: { kind: IndicationKind | null; text: string | null; burstMs: number | null; done: boolean }) {
-  if (!kind && done) return null;
+export function IndicationLine({ kind, text, burstMs, done, speedKmh }: { kind: IndicationKind | null; text: string | null; burstMs: number | null; done: boolean; speedKmh?: number | null }) {
+  if (!kind && done && speedKmh == null) return null;
   const k = kind ? KIND[kind] : null;
   return (
     <p className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-sm border border-border bg-surface px-3 py-2 text-sm">
@@ -18,6 +29,7 @@ export function IndicationLine({ kind, text, burstMs, done }: { kind: Indication
         : <span className="font-mono text-[11px] tracking-wider text-text-3">CAPTURING…</span>}
       <span>{text ?? "Collecting snapshots"}</span>
       {burstMs != null && <span className="font-mono text-xs text-text-3">{(burstMs / 1000).toFixed(1)} s burst</span>}
+      <SpeedChip kmh={speedKmh} />
     </p>
   );
 }

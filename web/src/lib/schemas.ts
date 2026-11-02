@@ -49,3 +49,42 @@ export const incidentAction = z.discriminatedUnion("action", [
   z.object({ action: z.literal("resolve") }),
   z.object({ action: z.literal("reopen") }),
 ]);
+
+// ---- behaviour rules (db/migrations/004_behavior_rules.sql) ---------------------------------------------------------
+export const ruleKinds = ["classifier", "indication"] as const;
+export const indicationKinds = ["appeared", "moving", "lingering", "crowd"] as const;
+export const severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
+
+const ruleConfig = z.object({ indication_kind: z.enum(indicationKinds), min_burst_ms: z.number().int().min(0).max(60000) }).partial().strict();
+
+const ruleBase = z.object({
+  title: z.string().trim().min(1).max(80),
+  description: z.string().trim().min(1).max(300),
+  kind: z.enum(ruleKinds),
+  question: z.string().trim().min(8).max(300).nullish(),
+  applies_to: z.array(z.string().min(1)).min(1, "Pick at least one category"),
+  threshold: z.number().gt(0).max(1).default(0.75),
+  config: ruleConfig.default({}),
+  severity: z.enum(severities),
+  opens_incident: z.boolean().default(true),
+  enabled: z.boolean().default(true),
+  position: z.number().int().min(0).max(1000).default(0),
+});
+
+const ruleChecks = (v: z.infer<typeof ruleBase>, ctx: z.RefinementCtx) => {
+  if (v.kind === "classifier" && !v.question) ctx.addIssue({ code: "custom", path: ["question"], message: "A classifier rule needs the yes/no question put to the model" });
+  if (v.kind === "indication" && !v.config.indication_kind) ctx.addIssue({ code: "custom", path: ["config", "indication_kind"], message: "An indication rule needs the burst indication it reacts to" });
+};
+
+export const ruleKey = z.string().regex(/^[a-z0-9_]{2,40}$/, "2-40 characters: lowercase letters, digits and _");
+/** Create: the key is chosen once and never changes. */
+export const ruleInput = ruleBase.extend({ key: ruleKey }).superRefine(ruleChecks);
+/** Update: full replacement of everything but the key (taken from the URL). */
+export const ruleUpdate = ruleBase.superRefine(ruleChecks);
+
+/** Columns that do not apply to the rule's kind are stored empty so a switched kind leaves no stale data behind. */
+export const normaliseRule = <T extends z.infer<typeof ruleBase>>(v: T) => ({
+  ...v,
+  question: v.kind === "classifier" ? (v.question ?? null) : null,
+  config: v.kind === "indication" ? v.config : {},
+});

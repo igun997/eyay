@@ -1,4 +1,5 @@
 import { query, one } from "./db";
+import { type EngineConfig, compact } from "../engine-config";
 import type { BehaviorRule, CategoryRow, EventRow, Frame, IncidentRow, SourceRow, TimelineRow, UserRow } from "../types";
 
 const EVENT_SELECT = `
@@ -7,7 +8,7 @@ const EVENT_SELECT = `
          e.incident_id, i.code AS incident_code, e.dismiss_reason, e.note, e.track_id,
          (SELECT count(*)::int FROM event_snapshots x WHERE x.event_id = e.id) AS snapshots,
          e.pipeline, e.cls_label, e.cls_confidence, e.cls_probs, e.cls_model, e.cls_ms, e.cls_error,
-         e.indication_kind, e.indication, e.burst_ms, e.burst_done, e.cls_flags, e.suspicious
+         e.indication_kind, e.indication, e.burst_ms, e.burst_done, e.cls_flags, e.suspicious, e.speed_kmh
   FROM events e
   JOIN sources s ON s.id = e.source_id
   LEFT JOIN incidents i ON i.id = e.incident_id`;
@@ -75,13 +76,13 @@ export const incidentEvents = (id: string) => query<EventRow>(`${EVENT_SELECT} W
 
 export const listSources = () =>
   query<SourceRow>(
-    `SELECT id, code, name, url, kind, labels, min_confidence, enabled, status, last_error, last_seen, fps, inference_ms
+    `SELECT id, code, name, url, kind, labels, min_confidence, enabled, status, last_error, last_seen, fps, inference_ms, config
      FROM sources ORDER BY code`,
   );
 
 export const getSource = async (id: string) =>
   (await query<SourceRow>(
-    `SELECT id, code, name, url, kind, labels, min_confidence, enabled, status, last_error, last_seen, fps, inference_ms
+    `SELECT id, code, name, url, kind, labels, min_confidence, enabled, status, last_error, last_seen, fps, inference_ms, config
      FROM sources WHERE id = $1`, [id]))[0] ?? null;
 
 export const listCategories = () => query<CategoryRow>("SELECT * FROM categories ORDER BY severity, label");
@@ -116,7 +117,39 @@ export async function overview() {
 /** Strip user:password from stream URLs. Only admins (who register them) get the real value. */
 export const maskCreds = <T extends { url: string }>(s: T): T => ({ ...s, url: s.url.replace(/\/\/([^:@/]+):([^@/]+)@/, "//$1:••••@") });
 
-export const listBehaviorRules = () => query<BehaviorRule>("SELECT key,title,description,kind,question,applies_to,threshold,severity,opens_incident,enabled FROM behavior_rules ORDER BY position");
+const RULE_COLS = "key,title,description,kind,question,applies_to,threshold,config,severity,opens_incident,enabled,position";
+export const listBehaviorRules = () => query<BehaviorRule>(`SELECT ${RULE_COLS} FROM behavior_rules ORDER BY position, key`);
+export const getBehaviorRule = async (key: string) => (await query<BehaviorRule>(`SELECT ${RULE_COLS} FROM behavior_rules WHERE key = $1`, [key]))[0] ?? null;
+
+type RuleWrite = Omit<BehaviorRule, "key">;
+const ruleParams = (r: RuleWrite) => [r.title, r.description, r.kind, r.question, r.applies_to, r.threshold, JSON.stringify(r.config ?? {}), r.severity, r.opens_incident, r.enabled, r.position];
+export const insertBehaviorRule = (key: string, r: RuleWrite) =>
+  one<BehaviorRule>(
+    `INSERT INTO behavior_rules (key,title,description,kind,question,applies_to,threshold,config,severity,opens_incident,enabled,position)
+     VALUES ($12,$1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11) RETURNING ${RULE_COLS}`,
+    [...ruleParams(r), key],
+  );
+export const updateBehaviorRule = async (key: string, r: RuleWrite) =>
+  (await query<BehaviorRule>(
+    `UPDATE behavior_rules SET title=$1,description=$2,kind=$3,question=$4,applies_to=$5,threshold=$6,config=$7::jsonb,severity=$8,opens_incident=$9,enabled=$10,position=$11
+     WHERE key=$12 RETURNING ${RULE_COLS}`,
+    [...ruleParams(r), key],
+  ))[0] ?? null;
+export const deleteBehaviorRule = async (key: string) => (await query("DELETE FROM behavior_rules WHERE key = $1 RETURNING key", [key])).length > 0;
+
+// ---- engine configuration (docs/ENGINE_CONFIG.md) -------------------------------------------------------------------
+export async function getEngineDefaults(): Promise<EngineConfig> {
+  const r = await one<{ value: EngineConfig }>("SELECT value FROM engine_settings WHERE key = 'defaults'");
+  return compact(r?.value);
+}
+export const setEngineDefaults = (cfg: EngineConfig, userId: string) =>
+  query(
+    `INSERT INTO engine_settings (key, value, updated_by) VALUES ('defaults', $1::jsonb, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+    [JSON.stringify(cfg), userId],
+  );
+export const setSourceConfig = async (id: string, cfg: EngineConfig) =>
+  (await query<{ code: string }>("UPDATE sources SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING code", [JSON.stringify(cfg), id]))[0] ?? null;
 
 export const listFrames = (eventIds: string[]) =>
   eventIds.length

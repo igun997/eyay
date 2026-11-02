@@ -85,7 +85,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
           </Panel>
           <Panel title="Evidence" bodyClassName="space-y-3 p-5">
             {shown && pick ? <DetectionImage src={`/api/events/${shown.id}/snapshot/${pick.idx}`} bbox={shownFrame?.bbox ?? null} label={shown.label} confidence={pick.idx === 0 ? shown.confidence : undefined} /> : <p className="text-sm text-text-2">No snapshots.</p>}
-            {shown && <IndicationLine kind={shown.indication_kind} text={shown.indication} burstMs={shown.burst_ms} done={shown.burst_done} />}
+            {shown && <IndicationLine kind={shown.indication_kind} text={shown.indication} burstMs={shown.burst_ms} done={shown.burst_done} speedKmh={shown.speed_kmh} />}
             <div className="grid grid-cols-4 gap-2">
               {frames.slice(0, 12).map((f) => (
                 <button key={`${f.event_id}-${f.idx}`} onClick={() => setPreview({ eventId: f.event_id, idx: f.idx })} aria-label={`Show ${events.find((e) => e.id === f.event_id)?.code} frame ${f.idx + 1}`}

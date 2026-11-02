@@ -102,7 +102,7 @@ export default function TriagePage() {
               </div>
               {current.snapshots > 0 && <DetectionImage src={`/api/events/${current.id}/snapshot/${frame?.idx ?? 0}`} bbox={frame ? frame.bbox : current.bbox} label={current.label} confidence={frame?.idx ? undefined : current.confidence} />}
               {frames && <FrameStrip frames={frames} active={frame?.idx ?? 0} onSelect={setFrameIdx} />}
-              <IndicationLine kind={current.indication_kind} text={current.indication} burstMs={current.burst_ms} done={current.burst_done} />
+              <IndicationLine kind={current.indication_kind} text={current.indication} burstMs={current.burst_ms} done={current.burst_done} speedKmh={current.speed_kmh} />
               <div>
                 <p className="caps border-b border-border pb-2">Classification</p>
                 <div className="flex items-center justify-between border-b border-border py-3">
