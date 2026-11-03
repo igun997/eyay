@@ -1,10 +1,12 @@
-// Idempotent, concurrency-safe migration runner + first-admin seed.
+// Idempotent, concurrency-safe migration runner + first-admin seed + optional one-time demo seed (scripts/seeds.ts).
 //   pnpm migrate                      (local)       node migrate.cjs     (inside the app image / compose `migrate` service)
-// Env: DATABASE_URL, MIGRATIONS_DIR (default ../db/migrations), ADMIN_EMAIL / ADMIN_PASSWORD (seed only when users is empty)
+// Env: DATABASE_URL, MIGRATIONS_DIR (default ../db/migrations), ADMIN_EMAIL / ADMIN_PASSWORD (seed only when users is empty),
+//      SEED_DEMO / SEED_DEMO_UCF / SEED_STREAM_BASE (demo cameras, once per database)
 import { join } from "node:path";
 import { Pool } from "pg";
 import bcrypt from "bcryptjs";
 import { loadMigrations, plan } from "./migrations-lib";
+import { runSeeds } from "./seeds";
 
 const dir = process.env.MIGRATIONS_DIR ?? join(process.cwd(), "..", "db", "migrations");
 const pool = new Pool({ connectionString: process.env.DATABASE_URL ?? "postgres://eyeai:eyeai@localhost:5432/eyeai" });
@@ -47,6 +49,7 @@ async function main() {
       await c.query("INSERT INTO users (email,name,password_hash,role) VALUES (lower($1),$2,$3,'admin')", [email, process.env.ADMIN_NAME ?? "Administrator", await bcrypt.hash(pw, 10)]);
       console.log("seeded admin", email);
     }
+    await runSeeds(c, process.env);                             // inside the lock, so replicas starting together seed once
     await c.query("SELECT pg_advisory_unlock(727274)");
   } finally { c.release(); await pool.end(); }
 }

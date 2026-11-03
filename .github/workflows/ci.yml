@@ -4,10 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # a push to main always finishes building its images
 
 jobs:
   web:
@@ -102,10 +103,10 @@ jobs:
         with: { name: e2e-output, path: e2e/out, if-no-files-found: ignore }
 
   publish:
-    name: Publish images (ghcr.io)
-    # only after a merge to main, and only when every check including the e2e passed
+    name: Build and publish images (ghcr.io)
+    # every push to main builds and publishes the images right away, in parallel with the checks (no `needs`): the `<sha>` tag
+    # identifies exactly what was built, `latest` follows main. A red check does not stop the images; look at the checks before deploying.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [web, python, engine, images, e2e]
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
     steps:
@@ -124,6 +125,7 @@ jobs:
             ghcr.io/${{ env.REPO }}-app:latest
             ghcr.io/${{ env.REPO }}-app:${{ github.sha }}
           cache-from: type=gha,scope=app
+          cache-to: type=gha,scope=app,mode=max
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -133,3 +135,4 @@ jobs:
             ghcr.io/${{ env.REPO }}-worker:latest
             ghcr.io/${{ env.REPO }}-worker:${{ github.sha }}
           cache-from: type=gha,scope=worker
+          cache-to: type=gha,scope=worker,mode=max

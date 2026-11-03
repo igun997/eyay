@@ -22,6 +22,11 @@ CLASSIFIER_URL=http://classifier:11434 docker compose --profile dev --profile cl
 docker compose up --build                            # production-like: no demo feed, register your own cameras
 ```
 
+**Environment.** Copy [.env.example](.env.example) to `.env`; every value has a default and the file documents each one (accounts, secrets, seeds, worker
+tuning, optional second AI check, ports). **Migrations and seeds run automatically** in the one-shot `migrate` service on every `docker compose up`: the
+schema is applied idempotently (checksummed, locked), the first admin is created when there are no users, and with `SEED_DEMO=1` the demo cameras are
+registered **once per database** (recorded in `seed_runs`; restarting with the flag still set does nothing, and cameras you delete are not brought back).
+
 **Demo (CPU only, no classifier, no GPU).** The default setup needs neither a GPU nor the optional second AI check: the detector runs on the CPU and
 classifies every event itself, and `CLASSIFIER_URL` is empty unless you set it. A fresh checkout reproduces the demo like this (sample videos and
 UCF-Crime clips are not in git; the scripts fetch them with pinned checksums):
@@ -31,7 +36,7 @@ scripts/fetch_assets.sh                 # sample videos (and models for the Pyth
 scripts/fetch_ucf_clips.sh              # optional: two real-footage evaluation clips (burglary, assault); read the terms in the script
 echo 'FEED_STREAMS="dock2 aisle gate burglary assault"' >> .env     # which videos the feeder plays
 docker compose --profile dev up -d --build                          # app + worker + db + demo video feed
-scripts/demo_seed.sh                    # registers the demo cameras (idempotent)
+# demo cameras: either set SEED_DEMO=1 in .env before the first start (automatic, once), or run scripts/demo_seed.sh (idempotent)
 ```
 The plan for showing it to users is in [docs/DEMO_PLAN.pdf](docs/DEMO_PLAN.pdf).
 
@@ -48,9 +53,10 @@ see [docs/DETECTION_CAPABILITIES.md](docs/DETECTION_CAPABILITIES.md) and measure
 **Alerts.** Admins build "when event A happens, simulate or send message B" (webhook, MQTT, PLC over Modbus TCP) in the dashboard. Everything starts in
 Practice mode and is logged; see [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md) for the safety limits (never wire it to a safety function).
 
-**Images.** CI builds `eyeai-app` and `eyeai-worker` on every push and PR. After a merge to `main` (and only when every check
-and the e2e pass) it publishes them to GitHub Container Registry: `ghcr.io/<owner>/<repo>-app` and `-worker`, tagged `latest` and the
-commit SHA. Pull one with `docker pull ghcr.io/<owner>/<repo>-app:latest` (the package is private until you change its visibility).
+**Images.** CI builds `eyeai-app` and `eyeai-worker` on every push and PR. **Every push to `main` builds and publishes them immediately** to GitHub
+Container Registry (`ghcr.io/<owner>/<repo>-app` and `-worker`, tagged `latest` and the commit SHA), in parallel with the checks and without waiting for
+them: a red check does not stop the images, so look at the checks before deploying (the SHA tag tells you exactly what was built). Pull one with
+`docker pull ghcr.io/<owner>/<repo>-app:latest` (the package is private until you change its visibility).
 
 Set `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` for anything beyond local testing. Roles: `admin` (sources, users,
 everything) and `security` (overview, triage, incidents, cameras, rules read-only). Throughput scales with CPU: the earlier Python worker

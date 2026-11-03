@@ -17,6 +17,9 @@ services:
       DATABASE_URL: postgres://eyeai:eyeai@db:5432/eyeai
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@eyeai.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      SEED_DEMO: ${SEED_DEMO:-0}                 # 1 = register the demo cameras once (recorded in seed_runs), right after the migrations
+      SEED_DEMO_UCF: ${SEED_DEMO_UCF:-0}         # 1 = also the two UCF-Crime evaluation cameras
+      SEED_STREAM_BASE: ${SEED_STREAM_BASE:-rtsp://mediamtx:8554}
     restart: "no"
 
   app:
