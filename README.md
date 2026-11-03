@@ -22,6 +22,19 @@ CLASSIFIER_URL=http://classifier:11434 docker compose --profile dev --profile cl
 docker compose up --build                            # production-like: no demo feed, register your own cameras
 ```
 
+**Demo (CPU only, no classifier, no GPU).** The default setup needs neither a GPU nor the optional second AI check: the detector runs on the CPU and
+classifies every event itself, and `CLASSIFIER_URL` is empty unless you set it. A fresh checkout reproduces the demo like this (sample videos and
+UCF-Crime clips are not in git; the scripts fetch them with pinned checksums):
+
+```bash
+scripts/fetch_assets.sh                 # sample videos (and models for the Python library) into data/ (not tracked)
+scripts/fetch_ucf_clips.sh              # optional: two real-footage evaluation clips (burglary, assault); read the terms in the script
+echo 'FEED_STREAMS="dock2 aisle gate burglary assault"' >> .env     # which videos the feeder plays
+docker compose --profile dev up -d --build                          # app + worker + db + demo video feed
+scripts/demo_seed.sh                    # registers the demo cameras (idempotent)
+```
+The plan for showing it to users is in [docs/DEMO_PLAN.pdf](docs/DEMO_PLAN.pdf).
+
 **Classification.** The camera AI (the detector) classifies every event itself (`person`, `vehicle` or `other`, with its certainty), so
 triage never waits for another model. An **optional second AI check** answers the yes/no behaviour questions of the question-type rules
 (weapon in hand, tampering, concealing, climbing): each such event is cropped around the person and sent to a System One decision model.
